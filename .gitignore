@@ -1,0 +1,9 @@
+.tools/
+*.rbxl
+*.rbxlx.lock
+*.rbxm
+*.rbxmx
+sourcemap.json
+studio-smoke.log
+studio-debug.log
+.postman/
