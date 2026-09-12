@@ -7,12 +7,13 @@
 - `stylua --check src tests` без diff.
 - `selene src tests` без errors/warnings.
 - `rojo build default.project.json -o AuraRush.rbxlx` успешен.
-- 12 headless Studio `RunScript` smoke проходят независимо: structural
-  `AURA_RUSH_SMOKE_PASS (161 checks)`, loading shell, client lifecycle, gameplay
+- 17 headless Studio `RunScript` smoke проходят независимо: structural
+  `AURA_RUSH_SMOKE_PASS (171 checks)`, server integration, loading shell, client
+  lifecycle, network security/readiness, analytics, data resilience, gameplay
   director, First Miracle, localization, presentation, economy/liveops/social,
   Living City v4, Remix City v5, Premium City v6 compatibility и Secret Frames v7.
 - Structural contract: client/schema v6/v5, 192 брифа, шесть art profiles,
-  6 Secret Frames, 32 remotes и все процедурные сцены. Director smoke подтверждает 18 432
+  6 Secret Frames, 35 remotes v2 и все процедурные сцены. Director smoke подтверждает 18 432
   theoretical / 1 536 empirical signatures.
 
 Headless `RunScript` не создаёт интерактивный LocalPlayer и не заменяет ручной

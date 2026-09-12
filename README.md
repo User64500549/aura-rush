@@ -1,4 +1,4 @@
-# AURA RUSH: СТИЛЬ-РЕЙД — Secret Frames v7
+# AURA RUSH: СТИЛЬ-РЕЙД — Operations Hardening v8
 
 «Собери образ. Пройди район. Перекрась сцену.» Это кооперативная
 fashion-adventure игра про развитие вкуса и собственного почерка. Игрок собирает
@@ -97,8 +97,13 @@ fashion-adventure игра про развитие вкуса и собстве�
 - Client contract v6 и profile schema v5 без смены DataStore key: миграции
   v1→v2→v3→v4→v5, session lease, autosave,
   read-only fallback в Studio, раздельные ledger для наград, трат и receipts.
-- 32 объявленных remotes, серверная авторитетность, rate limits, идемпотентные
-  round/quest/event/receipt операции и телеметрия funnel/economy/progression.
+- 35 канонических remotes v2, серверная авторитетность, rate limits,
+  идемпотентные round/quest/event/receipt операции и телеметрия
+  funnel/economy/progression.
+- Server-owned OPS для сотрудников: deny-by-default роли, health-сводка,
+  агрегированная диагностика DataStore, bounded session audit и только два
+  allowlisted шаблонных объявления — без произвольных команд, free text,
+  киков, выдачи валюты или изменения прогресса.
 - Runtime Experience Config allowlist ограничен ровно флагами `FirstMiracle`,
   `AdaptiveRuns`, `Progression`, `LiveOps`, `Crews`, `CommunityBloom`,
   `EditablePostcards`, `ModularAudio`, `ChallengeFramework2`, `BloomComposer2`,
@@ -111,14 +116,15 @@ fashion-adventure игра про развитие вкуса и собстве�
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tests/check-project.ps1
+powershell -ExecutionPolicy Bypass -File tests/verify-repository-contracts.ps1
 powershell -ExecutionPolicy Bypass -File tests/run-studio-smoke.ps1
 ```
 
-Второй скрипт запускает 12 независимых headless Studio `RunScript` проверок:
-структуру, loading shell, жизненный цикл Capture, gameplay director, Первый выход,
-русский текст, presentation, economy/liveops/social, Living City v4, Remix City v5,
-Premium City v6 compatibility и Secret Frames v7. Они проверяют
-runtime-контракты, но не являются интерактивным `Play Solo`.
+Studio runner запускает 17 независимых headless `RunScript` проверок: структуру,
+server integration, loading shell, lifecycle, security/readiness сети,
+analytics/data resilience, gameplay, Первый выход, русский текст, presentation,
+economy/liveops/social, Living City, Remix City, Premium City и Secret Frames.
+Они проверяют runtime-контракты, но не являются интерактивным `Play Solo`.
 
 Точечный запуск нового контракта:
 
@@ -147,18 +153,12 @@ mastery. Все product/pass ID равны `0`, subscription ID пуст, а `Pu
 
 ## Release gates
 
-Последний автоматический evidence run: `2026-09-04T05:03:33.3327838Z`, build
-`SHA256 57DB30D472E7F365D9F1EF3777CBD5CE39B8F4A52C65CBADA917710BCBFC2019`,
-`1039450` байт. 12 runtime suites дали PASS, runner завершился с кодом `0`;
-premium world: `402` hub parts, `1140` world parts, `23` lights и `293`
-частично прозрачных BasePart. Полный лог: `studio-smoke.log`.
-Style Chemistry отдельно проверена на 512 сочетаниях предметов после ошибки,
-обнаруженной живым Play Solo. [Интерактивный аудит](docs/PLAY_SOLO_V6_REVIEW.md).
-Дополнительно в настоящем Play Solo проверены загрузка LocalPlayer, русский
-onboarding, ракурс маршрута, примерочная, «Мой стиль», Results и возврат в хаб.
-Это не заменяет ручное прохождение всех физических действий и multiplayer/device QA.
-Последняя серверная правка отделяет ручной ввод от автоподбора палитры;
-normal/timeout/resume/rejected/duplicate paths повторно проверены smoke suite.
+Последний полный Studio-проход: `2026-09-12T15:37:34.8248266Z`, build
+`SHA256 BB134CD516B81031D4C4452F1242CB433880A5094098A3678A56C9EAB80CF8DC`,
+`1,119,604` байта; все 17 isolated suites прошли. Evidence относится только к
+этому build; полный лог — `studio-smoke.log`. Проверяемые automatic и manual gates описаны в
+[RELEASE_EVIDENCE](docs/RELEASE_EVIDENCE.md). Headless PASS не заменяет ручное
+прохождение, multiplayer и device QA.
 
 Release candidate ещё не считается production-ready, пока не выполнены:
 
@@ -185,4 +185,6 @@ Release candidate ещё не считается production-ready, пока не
 [changelog](docs/CHANGELOG.md). Текущая память эволюции: [vision](docs/VISION.md),
 [анализ игры](docs/GAME_ANALYSIS.md), [upgrade state](docs/UPGRADE_STATE.md),
 [известные проблемы](docs/KNOWN_PROBLEMS.md), [backlog](docs/IDEA_BACKLOG.md) и
-[метрики](docs/METRICS.md).
+[метрики](docs/METRICS.md). Для эксплуатации: [OPS](docs/ADMIN_OPERATIONS.md),
+[runbook](docs/RUNBOOK.md), [evidence](docs/RELEASE_EVIDENCE.md),
+[риски](docs/RISK_REGISTER.md) и [журнал решений](docs/DECISION_LOG.md).

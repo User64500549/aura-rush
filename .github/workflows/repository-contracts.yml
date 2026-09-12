@@ -1,0 +1,22 @@
+name: Repository contracts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Source and release-contract checks
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify repository contracts
+        shell: pwsh
+        run: ./tests/verify-repository-contracts.ps1

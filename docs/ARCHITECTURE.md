@@ -3,10 +3,10 @@
 Это краткая карта release candidate. Полный контракт находится в
 [ARCHITECTURE_V2.md](ARCHITECTURE_V2.md).
 
-Текущий контракт — client v6 / profile schema v5: 192 briefs, 6 worlds, 18
-encounter cells, 40 сезонных узлов, 6 Secret Frames и ровно 32 объявленных
-remotes. Secret Frames не добавляют client→server remote: поиск запускает сам
-серверный `ProximityPrompt`.
+Текущий контракт — client v6 / profile schema v5 / remotes v2: 192 briefs,
+6 worlds, 18 encounter cells, 40 сезонных узлов, 6 Secret Frames и 35
+объявленных remotes. Secret Frames не добавляют client→server remote: поиск
+запускает сам серверный `ProximityPrompt`.
 
 ## Загрузка и диагностика
 
@@ -103,3 +103,16 @@ Product/pass IDs остаются `0`, subscription ID — `""`, а `Purchases`,
 Shared-каталоги — источник истины для IDs брифов, стиля, продуктов, live-ops,
 локализации, remotes и art direction. После публикации постоянные IDs нельзя
 переименовывать без миграции.
+
+## Операции и вторичные durable stores
+
+`StaffPolicy` решает роль исключительно на сервере. `AdminService` выдаёт только
+авторизованным сотрудникам минимальный operations snapshot и принимает один
+allowlisted action — утверждённое шаблонное объявление. Пользовательский текст,
+команды, валютные мутации и moderation commands не входят в контракт.
+
+Помимо player profile, receipt archive, shared Atelier и Community Bloom проходят
+через `DataStoreOperation`: bounded retry, request-budget wait, diagnostics и
+идемпотентный transform. Community Bloom хранит ограниченный receipt ledger,
+поэтому повтор `UpdateAsync` не удваивает contribution при неизвестном исходе.
+Полная операционная схема: [ADMIN_OPERATIONS](ADMIN_OPERATIONS.md).

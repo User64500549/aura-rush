@@ -19,7 +19,7 @@
 | Static analysis | Auto | Selene: 0 errors, 0 warnings |
 | Rojo build | Auto | `AuraRush.rbxlx` создаётся без ошибки |
 | Module load | Studio RunScript | Все shared/server modules require без ошибок |
-| Contract versions | Auto/Studio RunScript | schema 5, client 6, remotes 32 |
+| Contract versions | Auto/Studio RunScript | schema 5, client 6, remotes v2 (35) |
 | Content counts | Auto/Studio RunScript | briefs 192, worlds 6, catalog IDs unique |
 | Director space | Studio RunScript | 18 432 theoretical и 1 536 empirical signatures |
 | Procedural world | Studio RunScript | Hub + 6 Finale roots + all challenge scenes/cameras |
@@ -28,15 +28,20 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tests/check-project.ps1
+powershell -ExecutionPolicy Bypass -File tests/verify-repository-contracts.ps1
 powershell -ExecutionPolicy Bypass -File tests/run-studio-smoke.ps1
 ```
 
-Общий Studio RunScript runner содержит 12
-независимых PASS-marker:
+Общий Studio RunScript runner содержит 17 независимых PASS-marker:
 
-- `AURA_RUSH_SMOKE_PASS (161 checks)`;
+- `AURA_RUSH_SMOKE_PASS (171 checks)`;
+- `AURA_RUSH_SERVER_INTEGRATION_PASS (55 checks)`;
 - `AURA_RUSH_LOADING_SHELL_PASS (18 checks)`;
 - `AURA_RUSH_CLIENT_LIFECYCLE_PASS (6 checks)`;
+- `AURA_RUSH_NETWORK_SECURITY_PASS`;
+- `AURA_RUSH_NETWORK_READINESS_PASS`;
+- `AURA_RUSH_ANALYTICS_LIFECYCLE_PASS`;
+- `AURA_RUSH_DATA_RESILIENCE_PASS (36 checks)`;
 - `AURA_RUSH_GAMEPLAY_DIRECTOR_SMOKE_PASS` с 18 432/1 536 signatures;
 - `AURA_RUSH_FIRST_MIRACLE_SMOKE_PASS`;
 - `AURA_RUSH_LOCALIZATION_CONTRACT_PASS`;
@@ -52,10 +57,11 @@ suite на отдельной копии place. PASS считается толь
 напечатанный Studio исходник не считается результатом. Ошибки проверяются до
 PASS и повторно после завершения процесса.
 
-Последний полный автоматический проход: `2026-09-04T05:03:33.3327838Z`, 12 PASS,
-runner exit code `0`. Сборка: `1039450` байт,
-`SHA256 57DB30D472E7F365D9F1EF3777CBD5CE39B8F4A52C65CBADA917710BCBFC2019`.
-Исходное доказательство — `studio-smoke.log`.
+Последний полный автоматический проход: `2026-09-12T15:37:34.8248266Z`, 17/17
+PASS, runner exit code `0`. Сборка: `1,119,604` байта,
+`SHA256 BB134CD516B81031D4C4452F1242CB433880A5094098A3678A56C9EAB80CF8DC`.
+Исходное доказательство — `studio-smoke.log`; не переносите этот hash в новый
+release candidate без повторного прогона.
 
 Эти проверки не запускают реальный LocalPlayer UI и не закрывают ручной
 `Play Solo` gate.
@@ -238,7 +244,8 @@ runner. Исправления и точный охват повторных п�
 
 ## Release decision
 
-Текущую сборку можно называть локальным RC на основании Auto и 12 Studio RunScript PASS.
+Текущую сборку можно называть локальным RC только на основании Auto и 17 Studio
+RunScript PASS для одного и того же build.
 Публикация/production release не выполнены и требуют закрыть все `OPEN GATE`:
 ручной Play Solo, лицензированные external assets/audio, реальные commerce IDs и
 sandbox flow, четырёхклиентный тест и device performance evidence.

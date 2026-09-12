@@ -1,5 +1,35 @@
 # UPGRADE HISTORY
 
+## 2026-09-12 — Cycle 5: Operations and durable-state hardening
+
+**Problem:** владелец не видел health текущего сервера через ограниченный
+server-authorized interface; receipt/Atelier/Community durable records имели
+разные retry paths; часть lifecycle state удерживала ушедшего игрока. Документы и
+structural smoke также продолжали описывать старый 32-remote contract.
+
+**Change:** введены 35 canonical remotes v2, `StaffPolicy`, `AdminService` и
+Russian OPS dashboard. Доступ deny-by-default; допустимы только health/audit и
+два предварительно утверждённых announcements. `DataStoreOperation` унифицирует
+budget/retry/diagnostics для вторичных stores, а Community Bloom использует
+bounded idempotent receipt ledger. Round lifecycle очищает state ушедшего игрока
+и terminal connection. Добавлены repository-contract CI, runbook и risk/evidence
+документы.
+
+**Expected result:** команда видит безопасный operational signal без создания
+arbitrary-command surface; transient DataStore failures становятся наблюдаемыми и
+не должны двойно применить contribution; новый контракт нельзя случайно рассинхронизировать
+с README/tests.
+
+**Risk:** OPS мог дать лишний доступ или разрушить UI; retry wrapper мог изменить
+semantics вторичных stores; новый remote count мог сломать существующий smoke.
+
+**Verification:** static/build PASS; `data-resilience` 36 checks;
+`server-integration` 55 checks; structural smoke 171 checks; repository contracts
+55 checks. Полный 17-suite evidence прошёл на
+`BB134CD516B81031D4C4452F1242CB433880A5094098A3678A56C9EAB80CF8DC`
+(`2026-09-12T15:37:34.8248266Z`); ручные Player/multiplayer/device gates остаются
+открытыми.
+
 ## 2026-09-04 — Cycle 1: Instant Arrival
 
 **Problem:** до `StarterPlayerScripts` не существовало собственного кадра; медленная

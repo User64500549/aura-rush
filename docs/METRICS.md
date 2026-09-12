@@ -79,3 +79,19 @@ Server world construction теперь замеряется под `ServerBoot.W
   низкая кардинальность.
 - Не принимать локальный Studio count за retention evidence.
 - Менять одну продуктовую переменную за эксперимент и заранее фиксировать guardrails.
+
+## Операционная health-сводка
+
+OPS не является продуктовой аналитикой и не отправляет PII. Она показывает только
+текущему авторизованному сотруднику агрегаты текущего сервера:
+
+| Сигнал | Вопрос | Реакция |
+|---|---|---|
+| Remote accepted/rejected | Валидный пользовательский flow или спам/сломанный client contract? | Сохранить build/time/error context; не ослаблять validation без reproducer |
+| Persistence retries/failures/budget waits | Есть ли throttling/outage и отложенные durable операции? | Проверить read-only/API status и идемпотентный повтор, не компенсировать вручную |
+| Heartbeat p95 | Появился ли server hitch после change? | Снять profiler evidence перед оптимизацией |
+| Round state/participants | Сервер застрял или lifecycle корректно очищает игроков? | Reproduce в private server, затем открыть точечный bug |
+| `admin_announcement` | Используются ли approved operational notices? | Только low-cardinality template ID; не логировать текст или список получателей |
+
+Исторический audit в OPS ограничен памятью сервера и не заменяет безопасный внешний
+incident log. Его задача — быстрый context для текущего private/live сервера.

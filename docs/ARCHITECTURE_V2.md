@@ -23,7 +23,7 @@ Server orchestration
 Клиент получает snapshot и визуализирует его; он не вычисляет authoritative
 progress. Shared-модули содержат стабильные идентификаторы и сетевой контракт, но
 не секреты и не доверенные решения. Contract inventory v7: 192 briefs, 6 worlds,
-18 encounter cells, 40 season nodes, 6 Secret Frames, 32 remotes и client/profile
+18 encounter cells, 40 season nodes, 6 Secret Frames, 35 remotes и client/profile
 schema versions 6/5.
 
 ## Порядок загрузки сервера
@@ -132,8 +132,9 @@ Camera/VFX/Audio clients используют его для синхронной
 
 Server→client snapshots могут повторяться; UI обязан быть идемпотентным по
 `stateVersion`/`roundId`. Неизвестный payload игнорируется, а не исполняется.
-Полный registry содержит ровно 32 remotes; новые intent нельзя создавать вне shared
-definitions и server binding.
+Полный registry содержит 35 remotes v2; новые intent нельзя создавать вне shared
+definitions и server binding. Три OPS-remotes не дают клиенту полномочия: role и
+каждое действие проверяет `AdminService` на сервере.
 
 ## Creator Hub и social meta
 
