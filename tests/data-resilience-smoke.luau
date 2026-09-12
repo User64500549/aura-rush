@@ -6,6 +6,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local serverRoot = ServerScriptService:WaitForChild("AuraRushServer")
 local retryModule = serverRoot:WaitForChild("Util"):WaitForChild("DataStoreRetry")
 local DataStoreRetry = require(retryModule)
+local operationModule = serverRoot:WaitForChild("Util"):WaitForChild("DataStoreOperation")
+local DataStoreOperation = require(operationModule)
 
 local checks = 0
 local function check(condition: boolean, message: string): ()
@@ -108,5 +110,28 @@ local Config = require(ReplicatedStorage:WaitForChild("AuraRushShared"):WaitForC
 check(type(Config.Persistence) == "table", "persistence policy is missing")
 check(Config.Persistence.MaximumAttempts == 3, "production retry count drifted")
 check(Config.Persistence.RequestBudgetWaitSeconds == 2, "budget wait policy drifted")
+
+local diagnostics = DataStoreOperation.NewDiagnostics()
+check(
+	diagnostics.requests == 0
+		and diagnostics.attempts == 0
+		and diagnostics.retries == 0
+		and diagnostics.failures == 0,
+	"shared persistence diagnostics did not start empty"
+)
+diagnostics.requests = 3
+local diagnosticsSnapshot = DataStoreOperation.Snapshot(diagnostics)
+diagnostics.requests = 4
+check(diagnosticsSnapshot.requests == 3, "shared persistence diagnostics leaked mutable state")
+
+for _, name in { "EconomyService", "SocialCreationService", "CommunityBloomService" } do
+	local module = servicesRoot:FindFirstChild(name)
+	check(module ~= nil and module:IsA("ModuleScript"), `persistence module missing: {name}`)
+	local source = (module :: ModuleScript).Source
+	check(
+		string.find(source, "DataStoreOperation", 1, true) ~= nil,
+		`persistence module bypasses the shared operation guard: {name}`
+	)
+end
 
 print(`AURA_RUSH_DATA_RESILIENCE_PASS ({checks} checks)`)

@@ -35,4 +35,21 @@ check(
 	"CaptureController keeps dead connection references"
 )
 
+local adminController = (clientRoot :: Folder):FindFirstChild("AdminDashboardController", true)
+check(
+	adminController ~= nil and adminController:IsA("ModuleScript"),
+	"AdminDashboardController is missing"
+)
+local adminSource = (adminController :: ModuleScript).Source
+check(
+	string.find(adminSource, "AutomaticCanvasSize = Enum.AutomaticSize.Y", 1, true) ~= nil
+		and string.find(adminSource, "ScrollingFrame", 1, true) ~= nil,
+	"admin dashboard can overlap instead of scrolling on a compact viewport"
+)
+check(
+	string.find(adminSource, "function AdminDashboardController.Destroy", 1, true) ~= nil
+		and string.find(adminSource, "connection:Disconnect()", 1, true) ~= nil,
+	"admin dashboard does not release client connections"
+)
+
 print(`AURA_RUSH_CLIENT_LIFECYCLE_PASS ({checks} checks)`)

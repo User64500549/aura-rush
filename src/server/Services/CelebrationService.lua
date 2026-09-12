@@ -9,6 +9,8 @@ local services: any = nil
 local nextActivationAt = 0
 local playerCooldowns: { [Player]: number } = {}
 local active = false
+local playerRemovingConnection: RBXScriptConnection? = nil
+local lifecycleEpoch = 0
 
 local function countToken(profile: any, tokenId: string): number
 	if type(profile) ~= "table" or type(profile.activationTokens) ~= "table" then
@@ -91,8 +93,11 @@ local function activate(player: Player, tokenId: string): ()
 		profile = services.Data.GetClientView(player),
 	})
 	services.Analytics.Log(player, "celebration_token_activated", 1, { tokenId = tokenId })
+	local expectedEpoch = lifecycleEpoch
 	task.delay(18, function()
-		active = false
+		if expectedEpoch == lifecycleEpoch then
+			active = false
+		end
 	end)
 end
 
@@ -128,6 +133,8 @@ function CelebrationService.RecoverPending(player: Player): number
 end
 
 function CelebrationService.Init(context: any): ()
+	CelebrationService.Destroy()
+	lifecycleEpoch += 1
 	services = context.Services
 	services.Remote.BindEvent("ActivateToken", 1, function(player: Player, payload: any)
 		if type(payload) ~= "table" or type(payload.tokenId) ~= "string" then
@@ -135,9 +142,21 @@ function CelebrationService.Init(context: any): ()
 		end
 		activate(player, string.sub(payload.tokenId, 1, 48))
 	end)
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		playerCooldowns[player] = nil
 	end)
+end
+
+function CelebrationService.Destroy(): ()
+	lifecycleEpoch += 1
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(playerCooldowns)
+	nextActivationAt = 0
+	active = false
+	services = nil
 end
 
 return CelebrationService

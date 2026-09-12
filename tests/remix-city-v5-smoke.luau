@@ -24,7 +24,7 @@ local ProductionAssetManifest = require(shared:WaitForChild("ProductionAssetMani
 assert(Config.ClientVersion >= 5, "v5 compatibility contract is not active")
 assert(Config.SchemaVersion == 5, "v5 profile schema is not active")
 assert(Config.UI.DefaultLocale == "ru", "Russian is not the primary language")
-assert(#Remotes.All == 32, "v5 remote contract is incomplete")
+assert(#Remotes.All == 35 and Remotes.Version == 2, "v2 remote contract is incomplete")
 for _, flag in { "RemixCity", "StyleChemistry", "GuardianFinales", "ReplayGhosts", "SeasonOne" } do
 	assert(Config.FeatureFlags[flag] == true, flag .. " feature flag is disabled")
 end

@@ -76,6 +76,7 @@ local remixSummary: any = nil
 local running = false
 local roundActive = false
 local tryEnrollLateJoin: ((Player) -> boolean)? = nil
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local function isFiniteNumber(value: any): boolean
 	return type(value) == "number" and value == value and value > -math.huge and value < math.huge
@@ -186,6 +187,24 @@ local function compactParticipants(): ()
 		end
 	end
 	participants = nextList
+end
+
+-- Keep a departing player out of every short-lived round table immediately.
+-- Besides avoiding stale player references, this makes the participant count in
+-- staff diagnostics truthful between the next phase tick and the next snapshot.
+local function clearPlayerRuntimeState(player: Player): ()
+	participantSet[player] = nil
+	votes[player] = nil
+	results[player] = nil
+	nominations[player] = nil
+	routeVotes[player] = nil
+	requeueRequests[player] = nil
+	backstageApprentices[player] = nil
+	for index = #participants, 1, -1 do
+		if participants[index] == player then
+			table.remove(participants, index)
+		end
+	end
 end
 
 local function snapshotFor(player: Player): any
@@ -886,6 +905,7 @@ local function cleanupRound(): ()
 	table.clear(participants)
 	table.clear(participantSet)
 	table.clear(votes)
+	table.clear(results)
 	table.clear(nominations)
 	table.clear(backstageApprentices)
 	table.clear(routeVotes)
@@ -1030,6 +1050,10 @@ local function runRound(): ()
 end
 
 function RoundService.Init(context: any): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
 	config = context.Config
 	briefCatalog = context.BriefCatalog
 	services = context.Services
@@ -1116,8 +1140,8 @@ function RoundService.Init(context: any): ()
 			{ key = "positive_nomination", from = player.DisplayName }
 		)
 	end)
-	Players.PlayerRemoving:Connect(function(player)
-		backstageApprentices[player] = nil
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
+		clearPlayerRuntimeState(player)
 	end)
 end
 
@@ -1215,6 +1239,43 @@ function RoundService.Stop(): ()
 	while roundActive and os.clock() < deadline do
 		task.wait(0.05)
 	end
+end
+
+-- Server shutdown and integration tests need to release the PlayerRemoving
+-- subscription too. Stop remains available for a normal in-session pause;
+-- Destroy is the terminal lifecycle operation used by Bootstrap.
+function RoundService.Destroy(): ()
+	RoundService.Stop()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	if not roundActive then
+		for _, player in Players:GetPlayers() do
+			clearPlayerRuntimeState(player)
+		end
+		table.clear(participants)
+		table.clear(participantSet)
+		table.clear(votes)
+		table.clear(results)
+		table.clear(nominations)
+		table.clear(routeVotes)
+		table.clear(requeueRequests)
+		table.clear(backstageApprentices)
+	end
+end
+
+-- A side-effect-free summary for staff diagnostics. Do not call GetSnapshot
+-- here: it can enroll a late-joining player and is therefore not an operations
+-- read API.
+function RoundService.GetOperationsView(): any
+	return {
+		state = state,
+		running = running,
+		roundId = roundId,
+		participantCount = #participants,
+		eligiblePlayerCount = RoundService.GetEligiblePlayerCount(),
+	}
 end
 
 function RoundService.GetSnapshot(player: Player): any

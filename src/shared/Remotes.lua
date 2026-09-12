@@ -32,6 +32,13 @@ local ClientToServer = table.freeze({
 	RequestSnapshot = define("RequestSnapshot", "RemoteFunction", "ClientToServer", 2, 1),
 	RequestMeta = define("RequestMeta", "RemoteFunction", "ClientToServer", 2, 1),
 	RequestFirstMiracle = define("RequestFirstMiracle", "RemoteFunction", "ClientToServer", 2, 1),
+	RequestAdminSnapshot = define(
+		"RequestAdminSnapshot",
+		"RemoteFunction",
+		"ClientToServer",
+		1,
+		0.5
+	),
 	VoteBrief = define("VoteBrief", "RemoteEvent", "ClientToServer", 3, 1),
 	BeatHit = define("BeatHit", "RemoteEvent", "ClientToServer", 16, 12),
 	SubmitPrism = define("SubmitPrism", "RemoteEvent", "ClientToServer", 3, 1),
@@ -52,6 +59,7 @@ local ClientToServer = table.freeze({
 	ActivateToken = define("ActivateToken", "RemoteEvent", "ClientToServer", 2, 0.25),
 	FirstMiracleAction = define("FirstMiracleAction", "RemoteEvent", "ClientToServer", 5, 2),
 	RemixAction = define("RemixAction", "RemoteEvent", "ClientToServer", 12, 6),
+	AdminAction = define("AdminAction", "RemoteEvent", "ClientToServer", 2, 0.25),
 })
 
 local ServerToClient = table.freeze({
@@ -64,12 +72,14 @@ local ServerToClient = table.freeze({
 	PostcardUpdate = define("PostcardUpdate", "RemoteEvent", "ServerToClient", nil, nil),
 	FirstMiracleUpdate = define("FirstMiracleUpdate", "RemoteEvent", "ServerToClient", nil, nil),
 	RemixUpdate = define("RemixUpdate", "RemoteEvent", "ServerToClient", nil, nil),
+	AdminUpdate = define("AdminUpdate", "RemoteEvent", "ServerToClient", nil, nil),
 })
 
 local all: { RemoteDefinition } = {
 	ClientToServer.RequestSnapshot,
 	ClientToServer.RequestMeta,
 	ClientToServer.RequestFirstMiracle,
+	ClientToServer.RequestAdminSnapshot,
 	ClientToServer.VoteBrief,
 	ClientToServer.BeatHit,
 	ClientToServer.SubmitPrism,
@@ -90,6 +100,7 @@ local all: { RemoteDefinition } = {
 	ClientToServer.ActivateToken,
 	ClientToServer.FirstMiracleAction,
 	ClientToServer.RemixAction,
+	ClientToServer.AdminAction,
 	ServerToClient.RoundSnapshot,
 	ServerToClient.ProgressUpdate,
 	ServerToClient.Toast,
@@ -99,6 +110,7 @@ local all: { RemoteDefinition } = {
 	ServerToClient.PostcardUpdate,
 	ServerToClient.FirstMiracleUpdate,
 	ServerToClient.RemixUpdate,
+	ServerToClient.AdminUpdate,
 }
 local byName: { [string]: RemoteDefinition } = {}
 
@@ -111,7 +123,7 @@ table.freeze(all)
 table.freeze(byName)
 
 local Remotes = {
-	Version = 1,
+	Version = 2,
 	FolderName = "AuraRushRemotes",
 	ClientToServer = ClientToServer,
 	ServerToClient = ServerToClient,

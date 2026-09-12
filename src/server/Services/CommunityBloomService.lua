@@ -5,6 +5,8 @@ local MemoryStoreService = game:GetService("MemoryStoreService")
 local MessagingService = game:GetService("MessagingService")
 local RunService = game:GetService("RunService")
 
+local DataStoreOperation = require(script.Parent.Parent.Util.DataStoreOperation)
+
 local CommunityBloomService = {}
 
 local services: any = nil
@@ -17,8 +19,16 @@ local durableStore: any = nil
 local cache: any = nil
 local subscription: any = nil
 local running = false
-local pendingByEvent: { [string]: number } = {}
+local pendingByEvent: { [string]: { [string]: number } } = {}
 local totals: { [string]: number } = {}
+local persistenceConfig: any = nil
+local durableDiagnostics = DataStoreOperation.NewDiagnostics()
+
+local MAX_DURABLE_RECEIPTS = 1_000
+
+local function validIdentifier(value: any, maximumLength: number): boolean
+	return type(value) == "string" and #value > 0 and #value <= maximumLength
+end
 
 local function isEnabled(): boolean
 	return enabled
@@ -62,6 +72,29 @@ local function eventKey(eventId: string): string
 	return "event:" .. eventId
 end
 
+local function trimTimestampMap(values: { [string]: number }, maximum: number): ()
+	local entries = {}
+	for id, timestamp in values do
+		table.insert(entries, { id = id, timestamp = tonumber(timestamp) or 0 })
+	end
+	table.sort(entries, function(left, right)
+		if left.timestamp == right.timestamp then
+			return left.id < right.id
+		end
+		return left.timestamp < right.timestamp
+	end)
+	for index = 1, math.max(0, #entries - maximum) do
+		values[entries[index].id] = nil
+	end
+end
+
+local function normalizeEventRecord(current: any): any
+	local record = if type(current) == "table" then current else {}
+	record.total = math.max(0, math.floor(tonumber(record.total) or 0))
+	record.receipts = if type(record.receipts) == "table" then record.receipts else {}
+	return record
+end
+
 local function publish(eventId: string, total: number): ()
 	if RunService:IsStudio() or game.GameId == 0 then
 		return
@@ -75,31 +108,52 @@ local function publish(eventId: string, total: number): ()
 end
 
 local function flushEvent(eventId: string): ()
-	local amount = math.max(0, math.floor(pendingByEvent[eventId] or 0))
-	if amount <= 0 then
+	local queued = pendingByEvent[eventId]
+	if type(queued) ~= "table" or next(queued) == nil then
 		return
 	end
-	pendingByEvent[eventId] = 0
+	local pending = table.clone(queued)
 	if not durableStore then
-		totals[eventId] = math.max(0, totals[eventId] or 0)
+		for contributionId, amount in pending do
+			if queued[contributionId] == amount then
+				queued[contributionId] = nil
+			end
+		end
+		if next(queued) == nil then
+			pendingByEvent[eventId] = nil
+		end
 		return
 	end
-	local ok, result = pcall(function()
-		return durableStore:UpdateAsync(eventKey(eventId), function(current: any)
-			local previous = if type(current) == "table"
-				then math.max(0, math.floor(tonumber(current.total) or 0))
-				else 0
-			return {
-				total = previous + amount,
-				updatedAt = os.time(),
-				version = 1,
-			}
-		end)
-	end)
+	local ok, result = DataStoreOperation.Update(
+		durableStore,
+		eventKey(eventId),
+		function(current: any): any
+			local record = normalizeEventRecord(current)
+			for contributionId, amount in pending do
+				if record.receipts[contributionId] == nil then
+					record.receipts[contributionId] = os.time()
+					record.total += math.max(0, math.floor(tonumber(amount) or 0))
+				end
+			end
+			trimTimestampMap(record.receipts, MAX_DURABLE_RECEIPTS)
+			record.updatedAt = os.time()
+			record.version = 2
+			return record
+		end,
+		persistenceConfig,
+		durableDiagnostics
+	)
 	if not ok or type(result) ~= "table" then
-		pendingByEvent[eventId] = (pendingByEvent[eventId] or 0) + amount
 		warn("[AuraRush/CommunityBloom] Durable flush deferred")
 		return
+	end
+	for contributionId, amount in pending do
+		if queued[contributionId] == amount then
+			queued[contributionId] = nil
+		end
+	end
+	if next(queued) == nil then
+		pendingByEvent[eventId] = nil
 	end
 	local total = math.max(0, math.floor(tonumber(result.total) or 0))
 	totals[eventId] = total
@@ -128,9 +182,12 @@ local function hydrateEvent(eventId: string): ()
 	if not durableStore then
 		return
 	end
-	local storeOk, record = pcall(function()
-		return durableStore:GetAsync(eventKey(eventId))
-	end)
+	local storeOk, record = DataStoreOperation.Read(
+		durableStore,
+		eventKey(eventId),
+		persistenceConfig,
+		durableDiagnostics
+	)
 	if storeOk and type(record) == "table" then
 		local durableTotal = math.max(0, math.floor(tonumber(record.total) or 0))
 		totals[eventId] = math.max(cachedTotal or 0, durableTotal)
@@ -138,8 +195,15 @@ local function hydrateEvent(eventId: string): ()
 end
 
 function CommunityBloomService.Init(context: any): ()
+	CommunityBloomService.Stop()
 	services = context.Services
 	config = context.Config
+	persistenceConfig = if type(config) == "table" then config.Persistence else nil
+	durableDiagnostics = DataStoreOperation.NewDiagnostics()
+	table.clear(pendingByEvent)
+	table.clear(totals)
+	durableStore = nil
+	cache = nil
 	local flags = config.FeatureFlags
 	flagService = services.Flags
 	enabled = type(flags) == "table" and flags.CommunityBloom == true
@@ -214,6 +278,9 @@ function CommunityBloomService.Contribute(
 	if not isEnabled() or not services.LiveOps then
 		return { ok = false, reason = "community_bloom_disabled" }
 	end
+	if not validIdentifier(eventId, 80) or not validIdentifier(contributionId, 100) then
+		return { ok = false, reason = "invalid_contribution" }
+	end
 	if not isQualifiedRound(player, contributionId) then
 		return {
 			ok = false,
@@ -227,8 +294,18 @@ function CommunityBloomService.Contribute(
 		then math.max(0, math.floor(tonumber(result.result.contributed) or 0))
 		else 0
 	if result.ok == true and result.alreadyApplied ~= true then
-		pendingByEvent[eventId] = (pendingByEvent[eventId] or 0) + appliedAmount
-		totals[eventId] = (totals[eventId] or 0) + appliedAmount
+		if appliedAmount > 0 then
+			local receiptId = string.format("%d:%s", math.max(0, player.UserId), contributionId)
+			local queued = pendingByEvent[eventId]
+			if not queued then
+				queued = {}
+				pendingByEvent[eventId] = queued
+			end
+			if queued[receiptId] == nil then
+				queued[receiptId] = appliedAmount
+				totals[eventId] = (totals[eventId] or 0) + appliedAmount
+			end
+		end
 	end
 	return {
 		ok = result.ok == true,
@@ -245,6 +322,9 @@ function CommunityBloomService.ClaimMilestone(
 ): any
 	if not isEnabled() or not services.LiveOps then
 		return { ok = false, reason = "community_bloom_disabled" }
+	end
+	if not validIdentifier(eventId, 80) or not validIdentifier(milestoneId, 100) then
+		return { ok = false, reason = "invalid_milestone" }
 	end
 	local globalTotal = math.max(0, math.floor(totals[eventId] or 0))
 	local scope = milestoneScope(eventId, milestoneId)
@@ -267,9 +347,17 @@ function CommunityBloomService.GetView(): any
 	}
 end
 
+function CommunityBloomService.GetPersistenceDiagnostics(): any
+	return DataStoreOperation.Snapshot(durableDiagnostics)
+end
+
 function CommunityBloomService.Stop(): ()
 	running = false
+	local pendingEventIds = {}
 	for eventId in pendingByEvent do
+		table.insert(pendingEventIds, eventId)
+	end
+	for _, eventId in pendingEventIds do
 		flushEvent(eventId)
 	end
 	if subscription then

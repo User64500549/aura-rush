@@ -999,6 +999,34 @@ local Config = {
 		AnnouncementTopic = "AuraRush_LiveOps_v2",
 	}),
 
+	-- Staff access is deliberately deny-by-default. Fill the owner IDs and/or
+	-- group ID only in reviewed production configuration; no client can grant
+	-- itself a role through the admin dashboard.
+	Admin = table.freeze({
+		Enabled = true,
+		OwnerUserIds = table.freeze({}),
+		GroupId = 0,
+		GroupRanks = table.freeze({
+			Admin = 200,
+			Moderator = 100,
+			Support = 50,
+		}),
+		AuditCapacity = 80,
+		BroadcastCooldownSeconds = 20,
+		AnnouncementTemplates = table.freeze({
+			table.freeze({
+				id = "maintenance_soon",
+				toastKey = "toast.admin_notice_maintenance_soon",
+				tone = "Warning",
+			}),
+			table.freeze({
+				id = "update_ready",
+				toastKey = "toast.admin_notice_update_ready",
+				tone = "Success",
+			}),
+		}),
+	}),
+
 	DataLimits = table.freeze({
 		MaximumSavedLooks = 20,
 		MaximumLookNameLength = 24,
@@ -1422,6 +1450,26 @@ local copy: { CopyEntry } = {
 		key = "toast.postcard_created",
 		en = "Moment card saved!",
 		ru = "Карточка момента сохранена!",
+	},
+	{
+		key = "toast.admin_notice_maintenance_soon",
+		en = "The district will pause briefly soon.",
+		ru = "Скоро будет короткий перерыв в районе.",
+	},
+	{
+		key = "toast.admin_notice_update_ready",
+		en = "A district update is ready.",
+		ru = "Обновление района уже готово.",
+	},
+	{
+		key = "toast.admin_action_done",
+		en = "Operations action completed.",
+		ru = "Действие выполнено.",
+	},
+	{
+		key = "toast.admin_action_blocked",
+		en = "The action is unavailable right now.",
+		ru = "Сейчас действие недоступно.",
 	},
 
 	-- Round states and direct instructions.
@@ -3263,6 +3311,13 @@ local ClientToServer = table.freeze({
 	RequestSnapshot = define("RequestSnapshot", "RemoteFunction", "ClientToServer", 2, 1),
 	RequestMeta = define("RequestMeta", "RemoteFunction", "ClientToServer", 2, 1),
 	RequestFirstMiracle = define("RequestFirstMiracle", "RemoteFunction", "ClientToServer", 2, 1),
+	RequestAdminSnapshot = define(
+		"RequestAdminSnapshot",
+		"RemoteFunction",
+		"ClientToServer",
+		1,
+		0.5
+	),
 	VoteBrief = define("VoteBrief", "RemoteEvent", "ClientToServer", 3, 1),
 	BeatHit = define("BeatHit", "RemoteEvent", "ClientToServer", 16, 12),
 	SubmitPrism = define("SubmitPrism", "RemoteEvent", "ClientToServer", 3, 1),
@@ -3283,6 +3338,7 @@ local ClientToServer = table.freeze({
 	ActivateToken = define("ActivateToken", "RemoteEvent", "ClientToServer", 2, 0.25),
 	FirstMiracleAction = define("FirstMiracleAction", "RemoteEvent", "ClientToServer", 5, 2),
 	RemixAction = define("RemixAction", "RemoteEvent", "ClientToServer", 12, 6),
+	AdminAction = define("AdminAction", "RemoteEvent", "ClientToServer", 2, 0.25),
 })
 
 local ServerToClient = table.freeze({
@@ -3295,12 +3351,14 @@ local ServerToClient = table.freeze({
 	PostcardUpdate = define("PostcardUpdate", "RemoteEvent", "ServerToClient", nil, nil),
 	FirstMiracleUpdate = define("FirstMiracleUpdate", "RemoteEvent", "ServerToClient", nil, nil),
 	RemixUpdate = define("RemixUpdate", "RemoteEvent", "ServerToClient", nil, nil),
+	AdminUpdate = define("AdminUpdate", "RemoteEvent", "ServerToClient", nil, nil),
 })
 
 local all: { RemoteDefinition } = {
 	ClientToServer.RequestSnapshot,
 	ClientToServer.RequestMeta,
 	ClientToServer.RequestFirstMiracle,
+	ClientToServer.RequestAdminSnapshot,
 	ClientToServer.VoteBrief,
 	ClientToServer.BeatHit,
 	ClientToServer.SubmitPrism,
@@ -3321,6 +3379,7 @@ local all: { RemoteDefinition } = {
 	ClientToServer.ActivateToken,
 	ClientToServer.FirstMiracleAction,
 	ClientToServer.RemixAction,
+	ClientToServer.AdminAction,
 	ServerToClient.RoundSnapshot,
 	ServerToClient.ProgressUpdate,
 	ServerToClient.Toast,
@@ -3330,6 +3389,7 @@ local all: { RemoteDefinition } = {
 	ServerToClient.PostcardUpdate,
 	ServerToClient.FirstMiracleUpdate,
 	ServerToClient.RemixUpdate,
+	ServerToClient.AdminUpdate,
 }
 local byName: { [string]: RemoteDefinition } = {}
 
@@ -3342,7 +3402,7 @@ table.freeze(all)
 table.freeze(byName)
 
 local Remotes = {
-	Version = 1,
+	Version = 2,
 	FolderName = "AuraRushRemotes",
 	ClientToServer = ClientToServer,
 	ServerToClient = ServerToClient,
@@ -3355,6 +3415,171 @@ return table.freeze(Remotes)
         </Properties>
       </Item>
       <Item class="ModuleScript" referent="15">
+        <Properties>
+          <string name="Name">StaffPolicy</string>
+          <string name="Source"><![CDATA[--!strict
+
+-- Server-side staff policy. This module deliberately has no client input: a
+-- visible dashboard is never treated as proof that a player is staff.
+local StaffPolicy = {}
+
+export type StaffRole = "Player" | "Support" | "Moderator" | "Admin" | "Owner"
+
+local ROLE_RANKS: { [StaffRole]: number } = table.freeze({
+	Player = 0,
+	Support = 10,
+	Moderator = 20,
+	Admin = 30,
+	Owner = 40,
+})
+
+local ROLE_LABELS: { [StaffRole]: string } = table.freeze({
+	Player = "Игрок",
+	Support = "Поддержка",
+	Moderator = "Модератор",
+	Admin = "Администратор",
+	Owner = "Владелец",
+})
+
+local ROLE_PERMISSIONS: { [StaffRole]: { [string]: boolean } } = table.freeze({
+	Player = table.freeze({}),
+	Support = table.freeze({
+		view_dashboard = true,
+		view_health = true,
+	}),
+	Moderator = table.freeze({
+		view_dashboard = true,
+		view_health = true,
+		view_audit = true,
+	}),
+	Admin = table.freeze({
+		view_dashboard = true,
+		view_health = true,
+		view_audit = true,
+		broadcast_announcement = true,
+	}),
+	Owner = table.freeze({
+		view_dashboard = true,
+		view_health = true,
+		view_audit = true,
+		broadcast_announcement = true,
+		manage_staff_policy = true,
+	}),
+})
+
+local function positiveInteger(value: any): number
+	if type(value) ~= "number" or value ~= value or value <= 0 or value == math.huge then
+		return 0
+	end
+	return math.floor(value)
+end
+
+local function hasUserId(values: any, userId: number): boolean
+	if type(values) ~= "table" then
+		return false
+	end
+	for _, value in values do
+		if positiveInteger(value) == userId then
+			return true
+		end
+	end
+	return false
+end
+
+local function configuredRank(config: any, name: string, fallback: number): number
+	local ranks = if type(config) == "table" then config.GroupRanks else nil
+	local value = positiveInteger(if type(ranks) == "table" then ranks[name] else nil)
+	if value <= 0 then
+		return fallback
+	end
+	return math.clamp(value, 1, 255)
+end
+
+local function groupRole(player: Player, config: any): StaffRole
+	local groupId = positiveInteger(if type(config) == "table" then config.GroupId else nil)
+	if groupId <= 0 then
+		return "Player"
+	end
+	local ok, rank = pcall(function()
+		return player:GetRankInGroup(groupId)
+	end)
+	if not ok or type(rank) ~= "number" then
+		return "Player"
+	end
+	local normalizedRank = math.clamp(math.floor(rank), 0, 255)
+	local adminRank = configuredRank(config, "Admin", 200)
+	local moderatorRank = configuredRank(config, "Moderator", 100)
+	local supportRank = configuredRank(config, "Support", 50)
+	if adminRank > 0 and normalizedRank >= adminRank then
+		return "Admin"
+	elseif moderatorRank > 0 and normalizedRank >= moderatorRank then
+		return "Moderator"
+	elseif supportRank > 0 and normalizedRank >= supportRank then
+		return "Support"
+	end
+	return "Player"
+end
+
+function StaffPolicy.ResolveRole(player: Player, config: any): StaffRole
+	if type(config) ~= "table" or config.Enabled ~= true then
+		return "Player"
+	end
+	local userId = positiveInteger(player.UserId)
+	if userId <= 0 then
+		return "Player"
+	end
+	if hasUserId(config.OwnerUserIds, userId) then
+		return "Owner"
+	end
+	local creatorTypeOk, creatorType = pcall(function()
+		return game.CreatorType
+	end)
+	local creatorIdOk, creatorId = pcall(function()
+		return game.CreatorId
+	end)
+	if
+		creatorTypeOk
+		and creatorIdOk
+		and creatorType == Enum.CreatorType.User
+		and positiveInteger(creatorId) == userId
+	then
+		return "Owner"
+	end
+	return groupRole(player, config)
+end
+
+function StaffPolicy.Can(role: StaffRole, permission: string): boolean
+	return ROLE_PERMISSIONS[role][permission] == true
+end
+
+function StaffPolicy.GetPermissions(role: StaffRole): { string }
+	local permissions = {}
+	for permission, enabled in ROLE_PERMISSIONS[role] do
+		if enabled then
+			table.insert(permissions, permission)
+		end
+	end
+	table.sort(permissions)
+	return permissions
+end
+
+function StaffPolicy.GetRank(role: StaffRole): number
+	return ROLE_RANKS[role]
+end
+
+function StaffPolicy.GetLabel(role: StaffRole): string
+	return ROLE_LABELS[role]
+end
+
+function StaffPolicy.IsStaff(role: StaffRole): boolean
+	return ROLE_RANKS[role] > 0
+end
+
+return table.freeze(StaffPolicy)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">StyleCatalog</string>
           <string name="Source"><![CDATA[--!strict
@@ -3800,7 +4025,7 @@ return table.freeze(StyleCatalog)
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">StyleChemistry</string>
           <string name="Source"><![CDATA[--!strict
@@ -4051,7 +4276,7 @@ return table.freeze(StyleChemistry)
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">StyleChemistryV2</string>
           <string name="Source"><![CDATA[--!strict
@@ -4144,7 +4369,7 @@ return table.freeze(M)
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">Types</string>
           <string name="Source"><![CDATA[--!strict
@@ -4619,11 +4844,11 @@ return table.freeze(Types)
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Folder" referent="19">
+      <Item class="Folder" referent="20">
         <Properties>
           <string name="Name">Util</string>
         </Properties>
-        <Item class="ModuleScript" referent="20">
+        <Item class="ModuleScript" referent="21">
           <Properties>
             <string name="Name">RateLimiter</string>
             <string name="Source"><![CDATA[--!strict
@@ -4719,7 +4944,7 @@ return table.freeze(RateLimiter)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="21">
+        <Item class="ModuleScript" referent="22">
           <Properties>
             <string name="Name">TableUtil</string>
             <string name="Source"><![CDATA[--!strict
@@ -4777,15 +5002,15 @@ return table.freeze(TableUtil)
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="22">
+  <Item class="ServerScriptService" referent="23">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="23">
+    <Item class="Folder" referent="24">
       <Properties>
         <string name="Name">AuraRushServer</string>
       </Properties>
-      <Item class="Script" referent="24">
+      <Item class="Script" referent="25">
         <Properties>
           <string name="Name">Bootstrap</string>
           <token name="RunContext">0</token>
@@ -4905,6 +5130,7 @@ local function boot(): ()
 	local FirstMiracleService = require(servicesRoot:WaitForChild("FirstMiracleService"))
 	local MetaService = require(servicesRoot:WaitForChild("MetaService"))
 	local SecretFrameService = require(servicesRoot:WaitForChild("SecretFrameService"))
+	local AdminService = require(servicesRoot:WaitForChild("AdminService"))
 
 	local context: any = {
 		Config = Config,
@@ -5001,6 +5227,7 @@ local function boot(): ()
 		"gameplay"
 	)
 	context.Services.Style = StyleService
+	lifecycle:Add("style", StyleService.Destroy)
 	StyleService.Init(context)
 
 	context.Services.CityPulse = CityPulseService
@@ -5008,10 +5235,11 @@ local function boot(): ()
 	CityPulseService.Init(context)
 
 	context.Services.Remix = RemixCityService
-	lifecycle:Add("remix city", RemixCityService.Reset)
+	lifecycle:Add("remix city", RemixCityService.Destroy)
 	RemixCityService.Init(context)
 
 	context.Services.Challenge = ChallengeService
+	lifecycle:Add("challenge", ChallengeService.Destroy)
 	ChallengeService.Init(context)
 	ChallengeService.BindWorld()
 
@@ -5025,16 +5253,19 @@ local function boot(): ()
 	context.Services.AuraGenome = AuraGenomeService
 
 	context.Services.Round = RoundService
-	lifecycle:Add("round", RoundService.Stop)
+	lifecycle:Add("round", RoundService.Destroy)
 	RoundService.Init(context)
 
 	context.Services.SocialCreation = SocialCreationService
+	lifecycle:Add("social creation", SocialCreationService.Destroy)
 	SocialCreationService.Init(context)
 
 	context.Services.Celebration = CelebrationService
+	lifecycle:Add("celebration", CelebrationService.Destroy)
 	CelebrationService.Init(context)
 
 	context.Services.FirstMiracle = FirstMiracleService
+	lifecycle:Add("first miracle", FirstMiracleService.Destroy)
 	FirstMiracleService.Init(context)
 
 	context.Services.Meta = MetaService
@@ -5043,6 +5274,10 @@ local function boot(): ()
 	context.Services.SecretFrames = SecretFrameService
 	lifecycle:Add("secret frames", SecretFrameService.Destroy)
 	SecretFrameService.Init(context)
+
+	context.Services.Admin = AdminService
+	lifecycle:Add("admin operations", AdminService.Destroy)
+	AdminService.Init(context)
 
 	setRuntimeState("server_starting", "Встречаем игроков", "players")
 	local lifecycleActive = true
@@ -5284,11 +5519,374 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Folder" referent="25">
+      <Item class="Folder" referent="26">
         <Properties>
           <string name="Name">Services</string>
         </Properties>
-        <Item class="ModuleScript" referent="26">
+        <Item class="ModuleScript" referent="27">
+          <Properties>
+            <string name="Name">AdminService</string>
+            <string name="Source"><![CDATA[--!strict
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local sharedRoot = ReplicatedStorage:WaitForChild("AuraRushShared")
+local StaffPolicy = require(sharedRoot:WaitForChild("StaffPolicy"))
+type StaffRole = StaffPolicy.StaffRole
+
+local AdminService = {}
+
+type RoleCache = {
+	role: StaffRole,
+	expiresAt: number,
+}
+
+type AuditEntry = {
+	id: number,
+	at: number,
+	actor: string,
+	role: StaffRole,
+	action: string,
+	result: string,
+	detail: string,
+}
+
+local services: any = nil
+local gameConfig: any = nil
+local adminConfig: any = nil
+local roleCache: { [Player]: RoleCache } = {}
+local actionCooldowns: { [Player]: number } = {}
+local auditEntries: { AuditEntry } = {}
+local playerAddedConnection: RBXScriptConnection? = nil
+local playerRemovingConnection: RBXScriptConnection? = nil
+local nextAuditId = 0
+local startedAt = 0
+
+local ROLE_CACHE_SECONDS = 60
+
+local function positiveInteger(value: any, fallback: number): number
+	if type(value) ~= "number" or value ~= value or value == math.huge or value <= 0 then
+		return fallback
+	end
+	return math.max(1, math.floor(value))
+end
+
+local function staffRole(player: Player, forceRefresh: boolean?): StaffRole
+	local cached = roleCache[player]
+	if not forceRefresh and cached and cached.expiresAt > os.clock() then
+		return cached.role
+	end
+	local role = StaffPolicy.ResolveRole(player, adminConfig)
+	roleCache[player] = {
+		role = role,
+		expiresAt = os.clock() + ROLE_CACHE_SECONDS,
+	}
+	player:SetAttribute("AuraRushStaffRole", role)
+	return role
+end
+
+local function auditCapacity(): number
+	return math.clamp(positiveInteger(adminConfig and adminConfig.AuditCapacity, 80), 10, 300)
+end
+
+local function record(
+	player: Player,
+	role: StaffRole,
+	action: string,
+	result: string,
+	detail: string
+): ()
+	nextAuditId += 1
+	table.insert(auditEntries, {
+		id = nextAuditId,
+		at = os.time(),
+		actor = string.sub(player.DisplayName, 1, 48),
+		role = role,
+		action = string.sub(action, 1, 48),
+		result = string.sub(result, 1, 32),
+		detail = string.sub(detail, 1, 96),
+	})
+	while #auditEntries > auditCapacity() do
+		table.remove(auditEntries, 1)
+	end
+end
+
+local function getRuntimeValue(name: string, fallback: string): string
+	local runtime = ReplicatedStorage:FindFirstChild("AuraRushRuntimeState")
+	if not runtime then
+		return fallback
+	end
+	local value = runtime:GetAttribute(name)
+	return if type(value) == "string" and value ~= "" then value else fallback
+end
+
+local function networkSummary(): any
+	local stats = if services
+			and services.Remote
+			and type(services.Remote.GetStats) == "function"
+		then services.Remote.GetStats()
+		else {}
+	local accepted = 0
+	local rejected = 0
+	local outbound = 0
+	for _, counter in stats do
+		if type(counter) == "table" then
+			accepted += math.max(0, math.floor(tonumber(counter.accepted) or 0))
+			rejected += math.max(0, math.floor(tonumber(counter.rejected) or 0))
+			outbound += math.max(0, math.floor(tonumber(counter.outbound) or 0))
+		end
+	end
+	return {
+		accepted = accepted,
+		rejected = rejected,
+		outbound = outbound,
+	}
+end
+
+local function auditView(): { any }
+	local result = {}
+	for index = math.max(1, #auditEntries - 11), #auditEntries do
+		local entry = auditEntries[index]
+		if entry then
+			table.insert(result, table.clone(entry))
+		end
+	end
+	return result
+end
+
+local function persistenceSummary(): any
+	local sources = {}
+	local profile = if services
+			and services.Data
+			and type(services.Data.GetPersistenceDiagnostics) == "function"
+		then services.Data.GetPersistenceDiagnostics()
+		else {}
+	sources.profiles = profile
+	if
+		services
+		and services.Economy
+		and type(services.Economy.GetReceiptPersistenceDiagnostics) == "function"
+	then
+		sources.receipts = services.Economy.GetReceiptPersistenceDiagnostics()
+	end
+	if
+		services
+		and services.SocialCreation
+		and type(services.SocialCreation.GetSharedPersistenceDiagnostics) == "function"
+	then
+		sources.atelier = services.SocialCreation.GetSharedPersistenceDiagnostics()
+	end
+	if
+		services
+		and services.Community
+		and type(services.Community.GetPersistenceDiagnostics) == "function"
+	then
+		sources.community = services.Community.GetPersistenceDiagnostics()
+	end
+
+	local summary = {
+		requests = 0,
+		attempts = 0,
+		retries = 0,
+		failures = 0,
+		budgetWaits = 0,
+		sources = sources,
+	}
+	for _, source in sources do
+		if type(source) == "table" then
+			summary.requests += math.max(0, math.floor(tonumber(source.requests) or 0))
+			summary.attempts += math.max(0, math.floor(tonumber(source.attempts) or 0))
+			summary.retries += math.max(0, math.floor(tonumber(source.retries) or 0))
+			summary.failures += math.max(0, math.floor(tonumber(source.failures) or 0))
+			summary.budgetWaits += math.max(0, math.floor(tonumber(source.budgetWaits) or 0))
+		end
+	end
+	return summary
+end
+
+local function operationsView(): any
+	local round = if services
+			and services.Round
+			and type(services.Round.GetOperationsView) == "function"
+		then services.Round.GetOperationsView()
+		else {}
+	local performance = if services
+			and services.Performance
+			and type(services.Performance.GetSnapshot) == "function"
+		then services.Performance.GetSnapshot()
+		else {}
+	return {
+		server = {
+			state = getRuntimeValue("ServerState", "unknown"),
+			step = getRuntimeValue("ServerStep", "unknown"),
+			detail = getRuntimeValue("ServerDetail", "Нет данных"),
+			uptimeSeconds = math.max(0, math.floor(os.clock() - startedAt)),
+			players = #Players:GetPlayers(),
+			maximumPlayers = math.max(1, math.floor(tonumber(gameConfig.MaximumPlayers) or 12)),
+		},
+		round = round,
+		performance = performance,
+		network = networkSummary(),
+		persistence = persistenceSummary(),
+	}
+end
+
+local function findTemplate(templateId: string): any
+	local templates = adminConfig and adminConfig.AnnouncementTemplates
+	if type(templates) ~= "table" then
+		return nil
+	end
+	for _, template in templates do
+		if type(template) == "table" and template.id == templateId then
+			return template
+		end
+	end
+	return nil
+end
+
+local function cooldownSeconds(): number
+	return math.clamp(
+		positiveInteger(adminConfig and adminConfig.BroadcastCooldownSeconds, 20),
+		5,
+		300
+	)
+end
+
+local function pushSnapshot(player: Player, kind: string, result: string?): ()
+	services.Remote.FireClient("AdminUpdate", player, {
+		kind = kind,
+		result = result,
+		data = AdminService.GetSnapshot(player),
+	})
+end
+
+local function handleAction(player: Player, payload: any): ()
+	local role = staffRole(player)
+	if not StaffPolicy.Can(role, "view_dashboard") then
+		return
+	end
+	if type(payload) ~= "table" or payload.action ~= "BroadcastTemplate" then
+		record(player, role, "unknown", "rejected", "unsupported action")
+		pushSnapshot(player, "ActionResult", "unsupported_action")
+		return
+	end
+	if not StaffPolicy.Can(role, "broadcast_announcement") then
+		record(player, role, "broadcast", "denied", "missing permission")
+		pushSnapshot(player, "ActionResult", "permission_denied")
+		return
+	end
+	if payload.confirmed ~= true or type(payload.templateId) ~= "string" then
+		record(player, role, "broadcast", "rejected", "confirmation or template missing")
+		pushSnapshot(player, "ActionResult", "confirmation_required")
+		return
+	end
+	local templateId = string.sub(payload.templateId, 1, 48)
+	local template = findTemplate(templateId)
+	if
+		type(template) ~= "table"
+		or type(template.toastKey) ~= "string"
+		or #template.toastKey == 0
+	then
+		record(player, role, "broadcast", "rejected", "template unavailable")
+		pushSnapshot(player, "ActionResult", "template_unavailable")
+		return
+	end
+	local now = os.clock()
+	if (actionCooldowns[player] or 0) > now then
+		record(player, role, "broadcast", "rejected", "cooldown")
+		pushSnapshot(player, "ActionResult", "cooldown")
+		return
+	end
+	actionCooldowns[player] = now + cooldownSeconds()
+	services.Remote.FireAll("Toast", {
+		key = template.toastKey,
+		tone = if type(template.tone) == "string" then template.tone else "Info",
+	})
+	record(player, role, "broadcast", "accepted", templateId)
+	if services.Analytics and type(services.Analytics.Log) == "function" then
+		services.Analytics.Log(player, "admin_announcement", 1, { template = templateId })
+	end
+	pushSnapshot(player, "ActionResult", "ok")
+end
+
+function AdminService.GetSnapshot(player: Player): any
+	local role = staffRole(player)
+	if not StaffPolicy.Can(role, "view_dashboard") then
+		return { authorized = false }
+	end
+	local snapshot = operationsView()
+	snapshot.authorized = true
+	snapshot.role = role
+	snapshot.roleLabel = StaffPolicy.GetLabel(role)
+	snapshot.permissions = StaffPolicy.GetPermissions(role)
+	snapshot.generatedAt = os.time()
+	snapshot.announcements = if StaffPolicy.Can(role, "broadcast_announcement")
+		then adminConfig.AnnouncementTemplates
+		else {}
+	if StaffPolicy.Can(role, "view_audit") then
+		snapshot.audit = auditView()
+	end
+	return snapshot
+end
+
+function AdminService.GetPolicySummary(): any
+	return {
+		enabled = type(adminConfig) == "table" and adminConfig.Enabled == true,
+		auditCapacity = auditCapacity(),
+		announcementCount = if type(adminConfig) == "table"
+				and type(adminConfig.AnnouncementTemplates) == "table"
+			then #adminConfig.AnnouncementTemplates
+			else 0,
+	}
+end
+
+function AdminService.Init(context: any): ()
+	AdminService.Destroy()
+	services = context.Services
+	gameConfig = context.Config
+	adminConfig = context.Config.Admin or { Enabled = false }
+	startedAt = os.clock()
+	playerAddedConnection = Players.PlayerAdded:Connect(function(player: Player)
+		staffRole(player, true)
+	end)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player: Player)
+		roleCache[player] = nil
+		actionCooldowns[player] = nil
+	end)
+	for _, player in Players:GetPlayers() do
+		staffRole(player, true)
+	end
+	services.Remote.BindFunction("RequestAdminSnapshot", 1, function(player: Player, _payload: any)
+		return AdminService.GetSnapshot(player)
+	end)
+	services.Remote.BindEvent("AdminAction", 1, handleAction)
+end
+
+function AdminService.Destroy(): ()
+	if playerAddedConnection then
+		playerAddedConnection:Disconnect()
+		playerAddedConnection = nil
+	end
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(roleCache)
+	table.clear(actionCooldowns)
+	table.clear(auditEntries)
+	nextAuditId = 0
+	startedAt = 0
+	services = nil
+	gameConfig = nil
+	adminConfig = nil
+end
+
+return AdminService
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="28">
           <Properties>
             <string name="Name">AnalyticsService</string>
             <string name="Source"><![CDATA[--!strict
@@ -5643,7 +6241,7 @@ return AnalyticsService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="27">
+        <Item class="ModuleScript" referent="29">
           <Properties>
             <string name="Name">AuraGenomeService</string>
             <string name="Source"><![CDATA[--!strict
@@ -5876,7 +6474,7 @@ return AuraGenomeService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="28">
+        <Item class="ModuleScript" referent="30">
           <Properties>
             <string name="Name">BloomComposerService</string>
             <string name="Source"><![CDATA[--!strict
@@ -6140,7 +6738,7 @@ return BloomComposerService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="29">
+        <Item class="ModuleScript" referent="31">
           <Properties>
             <string name="Name">CelebrationService</string>
             <string name="Source"><![CDATA[--!strict
@@ -6154,6 +6752,8 @@ local services: any = nil
 local nextActivationAt = 0
 local playerCooldowns: { [Player]: number } = {}
 local active = false
+local playerRemovingConnection: RBXScriptConnection? = nil
+local lifecycleEpoch = 0
 
 local function countToken(profile: any, tokenId: string): number
 	if type(profile) ~= "table" or type(profile.activationTokens) ~= "table" then
@@ -6236,8 +6836,11 @@ local function activate(player: Player, tokenId: string): ()
 		profile = services.Data.GetClientView(player),
 	})
 	services.Analytics.Log(player, "celebration_token_activated", 1, { tokenId = tokenId })
+	local expectedEpoch = lifecycleEpoch
 	task.delay(18, function()
-		active = false
+		if expectedEpoch == lifecycleEpoch then
+			active = false
+		end
 	end)
 end
 
@@ -6273,6 +6876,8 @@ function CelebrationService.RecoverPending(player: Player): number
 end
 
 function CelebrationService.Init(context: any): ()
+	CelebrationService.Destroy()
+	lifecycleEpoch += 1
 	services = context.Services
 	services.Remote.BindEvent("ActivateToken", 1, function(player: Player, payload: any)
 		if type(payload) ~= "table" or type(payload.tokenId) ~= "string" then
@@ -6280,16 +6885,28 @@ function CelebrationService.Init(context: any): ()
 		end
 		activate(player, string.sub(payload.tokenId, 1, 48))
 	end)
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		playerCooldowns[player] = nil
 	end)
+end
+
+function CelebrationService.Destroy(): ()
+	lifecycleEpoch += 1
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(playerCooldowns)
+	nextActivationAt = 0
+	active = false
+	services = nil
 end
 
 return CelebrationService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="30">
+        <Item class="ModuleScript" referent="32">
           <Properties>
             <string name="Name">ChallengeService</string>
             <string name="Source"><![CDATA[--!strict
@@ -6358,6 +6975,7 @@ local prismAttempts: { [Player]: number } = {}
 local touchConnections: { RBXScriptConnection } = {}
 local humanoidDefaults: { [Humanoid]: any } = {}
 local sharedMechanicState: any = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local function resetSharedMechanicState(): ()
 	sharedMechanicState = {
@@ -6714,7 +7332,61 @@ local function handleThreadTouch(collectible: BasePart, hit: BasePart): ()
 	})
 end
 
+local function clearPlayerState(player: Player): ()
+	activeParticipants[player] = nil
+	progress[player] = nil
+	threadCollected[player] = nil
+	threadLastTouchAt[player] = nil
+	beatHits[player] = nil
+	prismSequences[player] = nil
+	prismEncodedSequences[player] = nil
+	prismPositions[player] = nil
+	prismAttempts[player] = nil
+end
+
+local function disconnectTouchConnections(): ()
+	for _, connection in touchConnections do
+		connection:Disconnect()
+	end
+	table.clear(touchConnections)
+end
+
+function ChallengeService.Destroy(): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	disconnectTouchConnections()
+	restoreMovement()
+	table.clear(activeParticipants)
+	table.clear(progress)
+	table.clear(threadCollected)
+	table.clear(threadLastTouchAt)
+	table.clear(beatHits)
+	table.clear(prismSequences)
+	table.clear(prismEncodedSequences)
+	table.clear(prismPositions)
+	table.clear(prismAttempts)
+	activePhase = "Waiting"
+	activeRoundId = ""
+	activeActId = "thread_run"
+	activeActIndex = 1
+	activeActSeed = 1
+	activeTargetScale = 1
+	activeTeamCompletionRatio = 0.65
+	activeModifierId = ""
+	activeLaneTransform = ""
+	activeMovementStyle = ""
+	activeMechanicProfile = GameplayMechanics.Resolve({})
+	resetSharedMechanicState()
+	config = nil
+	remoteService = nil
+	worldService = nil
+	remixService = nil
+end
+
 function ChallengeService.Init(context: any): ()
+	ChallengeService.Destroy()
 	config = context.Config
 	remoteService = context.Services.Remote
 	worldService = context.Services.World
@@ -6727,24 +7399,11 @@ function ChallengeService.Init(context: any): ()
 		ChallengeService.SubmitPrism(player, payload)
 	end)
 
-	Players.PlayerRemoving:Connect(function(player)
-		activeParticipants[player] = nil
-		progress[player] = nil
-		threadCollected[player] = nil
-		threadLastTouchAt[player] = nil
-		beatHits[player] = nil
-		prismSequences[player] = nil
-		prismEncodedSequences[player] = nil
-		prismPositions[player] = nil
-		prismAttempts[player] = nil
-	end)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(clearPlayerState)
 end
 
 function ChallengeService.BindWorld(): ()
-	for _, connection in touchConnections do
-		connection:Disconnect()
-	end
-	table.clear(touchConnections)
+	disconnectTouchConnections()
 	local worldCollectibles = if type(worldService.GetAllCollectibles) == "function"
 		then worldService.GetAllCollectibles()
 		else worldService.GetCollectibles()
@@ -7263,7 +7922,7 @@ return ChallengeService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="31">
+        <Item class="ModuleScript" referent="33">
           <Properties>
             <string name="Name">CityPulseService</string>
             <string name="Source"><![CDATA[--!strict
@@ -7680,7 +8339,7 @@ return CityPulseService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="32">
+        <Item class="ModuleScript" referent="34">
           <Properties>
             <string name="Name">CommunityBloomService</string>
             <string name="Source"><![CDATA[--!strict
@@ -7689,6 +8348,8 @@ local DataStoreService = game:GetService("DataStoreService")
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local MessagingService = game:GetService("MessagingService")
 local RunService = game:GetService("RunService")
+
+local DataStoreOperation = require(script.Parent.Parent.Util.DataStoreOperation)
 
 local CommunityBloomService = {}
 
@@ -7702,8 +8363,16 @@ local durableStore: any = nil
 local cache: any = nil
 local subscription: any = nil
 local running = false
-local pendingByEvent: { [string]: number } = {}
+local pendingByEvent: { [string]: { [string]: number } } = {}
 local totals: { [string]: number } = {}
+local persistenceConfig: any = nil
+local durableDiagnostics = DataStoreOperation.NewDiagnostics()
+
+local MAX_DURABLE_RECEIPTS = 1_000
+
+local function validIdentifier(value: any, maximumLength: number): boolean
+	return type(value) == "string" and #value > 0 and #value <= maximumLength
+end
 
 local function isEnabled(): boolean
 	return enabled
@@ -7747,6 +8416,29 @@ local function eventKey(eventId: string): string
 	return "event:" .. eventId
 end
 
+local function trimTimestampMap(values: { [string]: number }, maximum: number): ()
+	local entries = {}
+	for id, timestamp in values do
+		table.insert(entries, { id = id, timestamp = tonumber(timestamp) or 0 })
+	end
+	table.sort(entries, function(left, right)
+		if left.timestamp == right.timestamp then
+			return left.id < right.id
+		end
+		return left.timestamp < right.timestamp
+	end)
+	for index = 1, math.max(0, #entries - maximum) do
+		values[entries[index].id] = nil
+	end
+end
+
+local function normalizeEventRecord(current: any): any
+	local record = if type(current) == "table" then current else {}
+	record.total = math.max(0, math.floor(tonumber(record.total) or 0))
+	record.receipts = if type(record.receipts) == "table" then record.receipts else {}
+	return record
+end
+
 local function publish(eventId: string, total: number): ()
 	if RunService:IsStudio() or game.GameId == 0 then
 		return
@@ -7760,31 +8452,52 @@ local function publish(eventId: string, total: number): ()
 end
 
 local function flushEvent(eventId: string): ()
-	local amount = math.max(0, math.floor(pendingByEvent[eventId] or 0))
-	if amount <= 0 then
+	local queued = pendingByEvent[eventId]
+	if type(queued) ~= "table" or next(queued) == nil then
 		return
 	end
-	pendingByEvent[eventId] = 0
+	local pending = table.clone(queued)
 	if not durableStore then
-		totals[eventId] = math.max(0, totals[eventId] or 0)
+		for contributionId, amount in pending do
+			if queued[contributionId] == amount then
+				queued[contributionId] = nil
+			end
+		end
+		if next(queued) == nil then
+			pendingByEvent[eventId] = nil
+		end
 		return
 	end
-	local ok, result = pcall(function()
-		return durableStore:UpdateAsync(eventKey(eventId), function(current: any)
-			local previous = if type(current) == "table"
-				then math.max(0, math.floor(tonumber(current.total) or 0))
-				else 0
-			return {
-				total = previous + amount,
-				updatedAt = os.time(),
-				version = 1,
-			}
-		end)
-	end)
+	local ok, result = DataStoreOperation.Update(
+		durableStore,
+		eventKey(eventId),
+		function(current: any): any
+			local record = normalizeEventRecord(current)
+			for contributionId, amount in pending do
+				if record.receipts[contributionId] == nil then
+					record.receipts[contributionId] = os.time()
+					record.total += math.max(0, math.floor(tonumber(amount) or 0))
+				end
+			end
+			trimTimestampMap(record.receipts, MAX_DURABLE_RECEIPTS)
+			record.updatedAt = os.time()
+			record.version = 2
+			return record
+		end,
+		persistenceConfig,
+		durableDiagnostics
+	)
 	if not ok or type(result) ~= "table" then
-		pendingByEvent[eventId] = (pendingByEvent[eventId] or 0) + amount
 		warn("[AuraRush/CommunityBloom] Durable flush deferred")
 		return
+	end
+	for contributionId, amount in pending do
+		if queued[contributionId] == amount then
+			queued[contributionId] = nil
+		end
+	end
+	if next(queued) == nil then
+		pendingByEvent[eventId] = nil
 	end
 	local total = math.max(0, math.floor(tonumber(result.total) or 0))
 	totals[eventId] = total
@@ -7813,9 +8526,12 @@ local function hydrateEvent(eventId: string): ()
 	if not durableStore then
 		return
 	end
-	local storeOk, record = pcall(function()
-		return durableStore:GetAsync(eventKey(eventId))
-	end)
+	local storeOk, record = DataStoreOperation.Read(
+		durableStore,
+		eventKey(eventId),
+		persistenceConfig,
+		durableDiagnostics
+	)
 	if storeOk and type(record) == "table" then
 		local durableTotal = math.max(0, math.floor(tonumber(record.total) or 0))
 		totals[eventId] = math.max(cachedTotal or 0, durableTotal)
@@ -7823,8 +8539,15 @@ local function hydrateEvent(eventId: string): ()
 end
 
 function CommunityBloomService.Init(context: any): ()
+	CommunityBloomService.Stop()
 	services = context.Services
 	config = context.Config
+	persistenceConfig = if type(config) == "table" then config.Persistence else nil
+	durableDiagnostics = DataStoreOperation.NewDiagnostics()
+	table.clear(pendingByEvent)
+	table.clear(totals)
+	durableStore = nil
+	cache = nil
 	local flags = config.FeatureFlags
 	flagService = services.Flags
 	enabled = type(flags) == "table" and flags.CommunityBloom == true
@@ -7899,6 +8622,9 @@ function CommunityBloomService.Contribute(
 	if not isEnabled() or not services.LiveOps then
 		return { ok = false, reason = "community_bloom_disabled" }
 	end
+	if not validIdentifier(eventId, 80) or not validIdentifier(contributionId, 100) then
+		return { ok = false, reason = "invalid_contribution" }
+	end
 	if not isQualifiedRound(player, contributionId) then
 		return {
 			ok = false,
@@ -7912,8 +8638,18 @@ function CommunityBloomService.Contribute(
 		then math.max(0, math.floor(tonumber(result.result.contributed) or 0))
 		else 0
 	if result.ok == true and result.alreadyApplied ~= true then
-		pendingByEvent[eventId] = (pendingByEvent[eventId] or 0) + appliedAmount
-		totals[eventId] = (totals[eventId] or 0) + appliedAmount
+		if appliedAmount > 0 then
+			local receiptId = string.format("%d:%s", math.max(0, player.UserId), contributionId)
+			local queued = pendingByEvent[eventId]
+			if not queued then
+				queued = {}
+				pendingByEvent[eventId] = queued
+			end
+			if queued[receiptId] == nil then
+				queued[receiptId] = appliedAmount
+				totals[eventId] = (totals[eventId] or 0) + appliedAmount
+			end
+		end
 	end
 	return {
 		ok = result.ok == true,
@@ -7930,6 +8666,9 @@ function CommunityBloomService.ClaimMilestone(
 ): any
 	if not isEnabled() or not services.LiveOps then
 		return { ok = false, reason = "community_bloom_disabled" }
+	end
+	if not validIdentifier(eventId, 80) or not validIdentifier(milestoneId, 100) then
+		return { ok = false, reason = "invalid_milestone" }
 	end
 	local globalTotal = math.max(0, math.floor(totals[eventId] or 0))
 	local scope = milestoneScope(eventId, milestoneId)
@@ -7952,9 +8691,17 @@ function CommunityBloomService.GetView(): any
 	}
 end
 
+function CommunityBloomService.GetPersistenceDiagnostics(): any
+	return DataStoreOperation.Snapshot(durableDiagnostics)
+end
+
 function CommunityBloomService.Stop(): ()
 	running = false
+	local pendingEventIds = {}
 	for eventId in pendingByEvent do
+		table.insert(pendingEventIds, eventId)
+	end
+	for _, eventId in pendingEventIds do
 		flushEvent(eventId)
 	end
 	if subscription then
@@ -7969,7 +8716,7 @@ return CommunityBloomService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="33">
+        <Item class="ModuleScript" referent="35">
           <Properties>
             <string name="Name">DataService</string>
             <string name="Source"><![CDATA[--!strict
@@ -9195,7 +9942,7 @@ return DataService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="34">
+        <Item class="ModuleScript" referent="36">
           <Properties>
             <string name="Name">EconomyService</string>
             <string name="Source"><![CDATA[--!strict
@@ -9203,10 +9950,14 @@ return DataService
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 
+local DataStoreOperation = require(script.Parent.Parent.Util.DataStoreOperation)
+
 local EconomyService = {}
 
 local dataService: any = nil
 local receiptStore: any = nil
+local persistenceConfig: any = nil
+local receiptDiagnostics = DataStoreOperation.NewDiagnostics()
 
 local MAX_TRANSACTION_AMOUNT = 1_000_000_000
 local MAX_TRANSACTION_ID_LENGTH = 160
@@ -9293,9 +10044,8 @@ local function readArchivedReceipt(purchaseId: string, userId: number): (boolean
 		-- truncated without a durable replacement.
 		return true, false, nil
 	end
-	local ok, record = pcall(function()
-		return receiptStore:GetAsync(key)
-	end)
+	local ok, record =
+		DataStoreOperation.Read(receiptStore, key, persistenceConfig, receiptDiagnostics)
 	if not ok then
 		return false, false, "receipt_archive_unavailable"
 	end
@@ -9317,24 +10067,19 @@ local function archiveReceipt(purchaseId: string, userId: number): (boolean, str
 		return false, "receipt_id_too_long"
 	end
 	local conflict = false
-	local ok = pcall(function()
-		receiptStore:UpdateAsync(key, function(current: any)
-			if current ~= nil then
-				if
-					type(current) ~= "table"
-					or math.floor(tonumber(current.userId) or 0) ~= userId
-				then
-					conflict = true
-				end
-				return current
+	local ok = DataStoreOperation.Update(receiptStore, key, function(current: any)
+		if current ~= nil then
+			if type(current) ~= "table" or math.floor(tonumber(current.userId) or 0) ~= userId then
+				conflict = true
 			end
-			return {
-				userId = userId,
-				processedAt = os.time(),
-				version = 1,
-			}
-		end)
-	end)
+			return current
+		end
+		return {
+			userId = userId,
+			processedAt = os.time(),
+			version = 1,
+		}
+	end, persistenceConfig, receiptDiagnostics)
 	if not ok or conflict then
 		return false,
 			if conflict then "receipt_archive_conflict" else "receipt_archive_write_failed"
@@ -9358,6 +10103,8 @@ end
 function EconomyService.Init(context: any): ()
 	dataService = context.Services.Data
 	receiptStore = nil
+	persistenceConfig = if type(context.Config) == "table" then context.Config.Persistence else nil
+	receiptDiagnostics = DataStoreOperation.NewDiagnostics()
 	if not RunService:IsStudio() and game.GameId ~= 0 then
 		local ok, store = pcall(function()
 			return DataStoreService:GetDataStore(RECEIPT_STORE_NAME)
@@ -9368,6 +10115,10 @@ function EconomyService.Init(context: any): ()
 			warn("[AuraRush/Economy] Receipt archive unavailable; using profile ledger")
 		end
 	end
+end
+
+function EconomyService.GetReceiptPersistenceDiagnostics(): any
+	return DataStoreOperation.Snapshot(receiptDiagnostics)
 end
 
 function EconomyService.GetBalance(player: Player): number
@@ -9635,7 +10386,7 @@ return EconomyService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="35">
+        <Item class="ModuleScript" referent="37">
           <Properties>
             <string name="Name">FeatureFlagService</string>
             <string name="Source"><![CDATA[--!strict
@@ -9855,7 +10606,7 @@ return FeatureFlagService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="36">
+        <Item class="ModuleScript" referent="38">
           <Properties>
             <string name="Name">FirstMiracleService</string>
             <string name="Source"><![CDATA[--!strict
@@ -9871,6 +10622,8 @@ local lastActionAt: { [Player]: number } = {}
 local scheduledSession: { [Player]: string } = {}
 local spatialSessions: { [Player]: any } = {}
 local firstInputSession: { [Player]: string } = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
+local lifecycleEpoch = 0
 
 local SPATIAL_STEPS = {
 	collect_thread = {
@@ -10325,7 +11078,11 @@ local function beginBloom(player: Player, reason: string, skipped: boolean): boo
 	})
 	spatialSessions[player] = nil
 	fireUpdate(player)
+	local expectedEpoch = lifecycleEpoch
 	task.delay(bloomSeconds(), function()
+		if expectedEpoch ~= lifecycleEpoch or not services then
+			return
+		end
 		completeMiracle(player, sessionId, reason)
 	end)
 	return true
@@ -10435,6 +11192,9 @@ completeMiracle = function(player: Player, sessionId: string, reason: string): (
 end
 
 local function scheduleSession(player: Player): ()
+	if not services then
+		return
+	end
 	local state = getState(player)
 	if not state or state.status == "NotStarted" or state.status == "Complete" then
 		return
@@ -10464,13 +11224,20 @@ local function scheduleSession(player: Player): ()
 		now,
 		(tonumber(state.expiresAt) or (now + maximumSeconds())) - math.ceil(bloomSeconds())
 	)
+	local expectedEpoch = lifecycleEpoch
 	task.delay(paletteDelay, function()
+		if expectedEpoch ~= lifecycleEpoch or not services then
+			return
+		end
 		local current = getState(player)
 		if current and current.sessionId == sessionId and current.status == "PaletteChoice" then
 			setPalette(player, defaultPaletteId(), "choice_timeout")
 		end
 	end)
 	task.delay(math.max(0, forcedBloomAt - now), function()
+		if expectedEpoch ~= lifecycleEpoch or not services then
+			return
+		end
 		local current = getState(player)
 		if current and current.sessionId == sessionId and current.status ~= "Complete" then
 			beginBloom(player, "time_guarantee", current.actionIndex < actionTarget())
@@ -10479,6 +11246,9 @@ local function scheduleSession(player: Player): ()
 	if state.status == "Bloom" then
 		local elapsed = math.max(0, now - (tonumber(state.bloomStartedAt) or now))
 		task.delay(math.max(0, bloomSeconds() - elapsed), function()
+			if expectedEpoch ~= lifecycleEpoch or not services then
+				return
+			end
 			completeMiracle(player, sessionId, tostring(state.completionReason or "resumed"))
 		end)
 	elseif forcedBloomAt <= now then
@@ -10583,6 +11353,9 @@ local function performAction(player: Player, actionId: string, payload: any?): (
 end
 
 function FirstMiracleService.Resume(player: Player): ()
+	if not services then
+		return
+	end
 	local state = getState(player)
 	if state and state.status ~= "NotStarted" and state.status ~= "Complete" then
 		scheduleSession(player)
@@ -10590,6 +11363,8 @@ function FirstMiracleService.Resume(player: Player): ()
 end
 
 function FirstMiracleService.Init(context: any): ()
+	FirstMiracleService.Destroy()
+	lifecycleEpoch += 1
 	services = context.Services
 	config = context.Config
 	services.Remote.BindFunction("RequestFirstMiracle", 1, function(player: Player, _payload: any)
@@ -10612,7 +11387,7 @@ function FirstMiracleService.Init(context: any): ()
 			beginBloom(player, "player_skip", true)
 		end
 	end)
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		lastActionAt[player] = nil
 		scheduledSession[player] = nil
 		spatialSessions[player] = nil
@@ -10620,11 +11395,25 @@ function FirstMiracleService.Init(context: any): ()
 	end)
 end
 
+function FirstMiracleService.Destroy(): ()
+	lifecycleEpoch += 1
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(lastActionAt)
+	table.clear(scheduledSession)
+	table.clear(spatialSessions)
+	table.clear(firstInputSession)
+	services = nil
+	config = nil
+end
+
 return FirstMiracleService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="37">
+        <Item class="ModuleScript" referent="39">
           <Properties>
             <string name="Name">GameplayMechanics</string>
             <string name="Source"><![CDATA[--!strict
@@ -10928,7 +11717,7 @@ return GameplayMechanics
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="38">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">LiveOpsService</string>
             <string name="Source"><![CDATA[--!strict
@@ -11230,7 +12019,7 @@ return LiveOpsService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="39">
+        <Item class="ModuleScript" referent="41">
           <Properties>
             <string name="Name">MetaService</string>
             <string name="Source"><![CDATA[--!strict
@@ -11373,7 +12162,7 @@ return MetaService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="42">
           <Properties>
             <string name="Name">PartyService</string>
             <string name="Source"><![CDATA[--!strict
@@ -11385,6 +12174,9 @@ local PartyService = {}
 
 local snapshots: { [string]: { any } } = {}
 local connections: { [Player]: RBXScriptConnection } = {}
+local playerAddedConnection: RBXScriptConnection? = nil
+local playerRemovingConnection: RBXScriptConnection? = nil
+local lifecycleEpoch = 0
 
 local function partyIdFor(player: Player): string
 	local ok, value = pcall(function()
@@ -11398,30 +12190,41 @@ function PartyService.RefreshPlayer(player: Player): ()
 	if partyId == "" then
 		return
 	end
+	local expectedEpoch = lifecycleEpoch
 	task.spawn(function()
 		local ok, partyData = pcall(function()
 			return SocialService:GetPartyAsync(partyId)
 		end)
-		if ok and type(partyData) == "table" then
+		if
+			expectedEpoch == lifecycleEpoch
+			and player.Parent == Players
+			and ok
+			and type(partyData) == "table"
+		then
 			snapshots[partyId] = partyData
 		end
 	end)
 end
 
 function PartyService.Init(_context: any): ()
+	PartyService.Destroy()
 	local function observe(player: Player): ()
 		PartyService.RefreshPlayer(player)
 		local ok, signal = pcall(function()
 			return (player :: any):GetPropertyChangedSignal("PartyId")
 		end)
 		if ok and typeof(signal) == "RBXScriptSignal" then
+			local existing = connections[player]
+			if existing then
+				existing:Disconnect()
+			end
 			connections[player] = signal:Connect(function()
 				PartyService.RefreshPlayer(player)
 			end)
 		end
 	end
-	Players.PlayerAdded:Connect(observe)
-	Players.PlayerRemoving:Connect(function(player)
+	playerAddedConnection = Players.PlayerAdded:Connect(observe)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		local connection = connections[player]
 		if connection then
 			connection:Disconnect()
@@ -11470,6 +12273,15 @@ function PartyService.GetClientView(player: Player): any
 end
 
 function PartyService.Destroy(): ()
+	lifecycleEpoch += 1
+	if playerAddedConnection then
+		playerAddedConnection:Disconnect()
+		playerAddedConnection = nil
+	end
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
 	for player, connection in connections do
 		connection:Disconnect()
 		connections[player] = nil
@@ -11481,7 +12293,7 @@ return PartyService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="41">
+        <Item class="ModuleScript" referent="43">
           <Properties>
             <string name="Name">PerformanceService</string>
             <string name="Source"><![CDATA[--!strict
@@ -11586,7 +12398,7 @@ return PerformanceService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="42">
+        <Item class="ModuleScript" referent="44">
           <Properties>
             <string name="Name">ProductionAssetService</string>
             <string name="Source"><![CDATA[--!strict
@@ -11694,7 +12506,7 @@ return ProductionAssetService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="43">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">ProgressionService</string>
             <string name="Source"><![CDATA[--!strict
@@ -12028,7 +12840,7 @@ return ProgressionService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">PurchaseService</string>
             <string name="Source"><![CDATA[--!strict
@@ -12226,7 +13038,7 @@ return PurchaseService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="45">
+        <Item class="ModuleScript" referent="47">
           <Properties>
             <string name="Name">QuestService</string>
             <string name="Source"><![CDATA[--!strict
@@ -12648,7 +13460,7 @@ return QuestService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="46">
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">RemixCityService</string>
             <string name="Source"><![CDATA[--!strict
@@ -12679,6 +13491,7 @@ local lastMomentKind = ""
 local guardian: any = nil
 local pendingReplays: { [Player]: any } = {}
 local actionCooldowns: { [Player]: { [string]: number } } = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local VALID_MOMENT_KINDS = table.freeze({
 	route = true,
@@ -13167,6 +13980,7 @@ local function guardianPulse(player: Player): boolean
 end
 
 function RemixCityService.Init(context: any): ()
+	RemixCityService.Destroy()
 	config = context.Config
 	services = context.Services
 	styleCatalog = context.StyleCatalog
@@ -13204,7 +14018,7 @@ function RemixCityService.Init(context: any): ()
 		end
 	end)
 
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		participantSet[player] = nil
 		roles[player] = nil
 		roleContributions[player] = nil
@@ -13468,11 +14282,24 @@ function RemixCityService.Reset(): ()
 	table.clear(actionCooldowns)
 end
 
+function RemixCityService.Destroy(): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	RemixCityService.Reset()
+	config = nil
+	services = nil
+	styleCatalog = nil
+	remixCatalog = nil
+	styleChemistry = nil
+end
+
 return RemixCityService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="47">
+        <Item class="ModuleScript" referent="49">
           <Properties>
             <string name="Name">RemoteService</string>
             <string name="Source"><![CDATA[--!strict
@@ -13486,21 +14313,6 @@ local DEFAULT_FOLDER_NAME = "AuraRushRemotes"
 local MAX_PAYLOAD_DEPTH = 5
 local MAX_PAYLOAD_NODES = 96
 local MAX_PAYLOAD_STRING_BYTES = 256
-local REMOTE_CLASSES: { [string]: string } = {
-	RequestSnapshot = "RemoteFunction",
-	VoteBrief = "RemoteEvent",
-	BeatHit = "RemoteEvent",
-	SubmitPrism = "RemoteEvent",
-	SetStyle = "RemoteEvent",
-	UnlockStyle = "RemoteEvent",
-	UpdateSettings = "RemoteEvent",
-	SetStyleReady = "RemoteEvent",
-	Nominate = "RemoteEvent",
-	RoundSnapshot = "RemoteEvent",
-	ProgressUpdate = "RemoteEvent",
-	Toast = "RemoteEvent",
-	BloomStarted = "RemoteEvent",
-}
 
 type Window = {
 	startedAt: number,
@@ -13673,20 +14485,27 @@ function RemoteService.Init(context: any): ()
 	folder = remoteFolder
 	remoteFolder:SetAttribute("ContractReady", false)
 
-	local classes: { [string]: string } = table.clone(REMOTE_CLASSES)
-	if type(definition) == "table" and type(definition.All) == "table" then
-		for _, remoteDefinition in definition.All do
-			if
-				type(remoteDefinition) == "table"
-				and type(remoteDefinition.name) == "string"
-				and (
-					remoteDefinition.className == "RemoteEvent"
-					or remoteDefinition.className == "RemoteFunction"
-				)
-			then
-				classes[remoteDefinition.name] = remoteDefinition.className
-			end
-		end
+	assert(
+		type(definition) == "table" and type(definition.All) == "table",
+		"Aura Rush remote definitions are required"
+	)
+	local classes: { [string]: string } = {}
+	for _, remoteDefinition in definition.All do
+		assert(type(remoteDefinition) == "table", "Invalid Aura Rush remote definition")
+		assert(
+			type(remoteDefinition.name) == "string" and remoteDefinition.name ~= "",
+			"Aura Rush remote definition is missing a name"
+		)
+		assert(
+			remoteDefinition.className == "RemoteEvent"
+				or remoteDefinition.className == "RemoteFunction",
+			"Aura Rush remote definition has an invalid class"
+		)
+		assert(
+			classes[remoteDefinition.name] == nil,
+			"Duplicate Aura Rush remote definition: " .. remoteDefinition.name
+		)
+		classes[remoteDefinition.name] = remoteDefinition.className
 	end
 	local contractCount = 0
 	for name, className in classes do
@@ -13830,7 +14649,7 @@ return RemoteService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="48">
+        <Item class="ModuleScript" referent="50">
           <Properties>
             <string name="Name">RewardService</string>
             <string name="Source"><![CDATA[--!strict
@@ -14132,7 +14951,7 @@ return RewardService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="49">
+        <Item class="ModuleScript" referent="51">
           <Properties>
             <string name="Name">RoundService</string>
             <string name="Source"><![CDATA[--!strict
@@ -14213,6 +15032,7 @@ local remixSummary: any = nil
 local running = false
 local roundActive = false
 local tryEnrollLateJoin: ((Player) -> boolean)? = nil
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local function isFiniteNumber(value: any): boolean
 	return type(value) == "number" and value == value and value > -math.huge and value < math.huge
@@ -14323,6 +15143,24 @@ local function compactParticipants(): ()
 		end
 	end
 	participants = nextList
+end
+
+-- Keep a departing player out of every short-lived round table immediately.
+-- Besides avoiding stale player references, this makes the participant count in
+-- staff diagnostics truthful between the next phase tick and the next snapshot.
+local function clearPlayerRuntimeState(player: Player): ()
+	participantSet[player] = nil
+	votes[player] = nil
+	results[player] = nil
+	nominations[player] = nil
+	routeVotes[player] = nil
+	requeueRequests[player] = nil
+	backstageApprentices[player] = nil
+	for index = #participants, 1, -1 do
+		if participants[index] == player then
+			table.remove(participants, index)
+		end
+	end
 end
 
 local function snapshotFor(player: Player): any
@@ -15023,6 +15861,7 @@ local function cleanupRound(): ()
 	table.clear(participants)
 	table.clear(participantSet)
 	table.clear(votes)
+	table.clear(results)
 	table.clear(nominations)
 	table.clear(backstageApprentices)
 	table.clear(routeVotes)
@@ -15167,6 +16006,10 @@ local function runRound(): ()
 end
 
 function RoundService.Init(context: any): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
 	config = context.Config
 	briefCatalog = context.BriefCatalog
 	services = context.Services
@@ -15253,8 +16096,8 @@ function RoundService.Init(context: any): ()
 			{ key = "positive_nomination", from = player.DisplayName }
 		)
 	end)
-	Players.PlayerRemoving:Connect(function(player)
-		backstageApprentices[player] = nil
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
+		clearPlayerRuntimeState(player)
 	end)
 end
 
@@ -15352,6 +16195,43 @@ function RoundService.Stop(): ()
 	while roundActive and os.clock() < deadline do
 		task.wait(0.05)
 	end
+end
+
+-- Server shutdown and integration tests need to release the PlayerRemoving
+-- subscription too. Stop remains available for a normal in-session pause;
+-- Destroy is the terminal lifecycle operation used by Bootstrap.
+function RoundService.Destroy(): ()
+	RoundService.Stop()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	if not roundActive then
+		for _, player in Players:GetPlayers() do
+			clearPlayerRuntimeState(player)
+		end
+		table.clear(participants)
+		table.clear(participantSet)
+		table.clear(votes)
+		table.clear(results)
+		table.clear(nominations)
+		table.clear(routeVotes)
+		table.clear(requeueRequests)
+		table.clear(backstageApprentices)
+	end
+end
+
+-- A side-effect-free summary for staff diagnostics. Do not call GetSnapshot
+-- here: it can enroll a late-joining player and is therefore not an operations
+-- read API.
+function RoundService.GetOperationsView(): any
+	return {
+		state = state,
+		running = running,
+		roundId = roundId,
+		participantCount = #participants,
+		eligiblePlayerCount = RoundService.GetEligiblePlayerCount(),
+	}
 end
 
 function RoundService.GetSnapshot(player: Player): any
@@ -15456,7 +16336,7 @@ return RoundService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="50">
+        <Item class="ModuleScript" referent="52">
           <Properties>
             <string name="Name">RunDirectorService</string>
             <string name="Source"><![CDATA[--!strict
@@ -16205,7 +17085,7 @@ return RunDirectorService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="51">
+        <Item class="ModuleScript" referent="53">
           <Properties>
             <string name="Name">SecretFrameService</string>
             <string name="Source"><![CDATA[--!strict
@@ -16526,7 +17406,7 @@ return SecretFrameService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="52">
+        <Item class="ModuleScript" referent="54">
           <Properties>
             <string name="Name">SocialCreationService</string>
             <string name="Source"><![CDATA[--!strict
@@ -16535,6 +17415,8 @@ local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+
+local DataStoreOperation = require(script.Parent.Parent.Util.DataStoreOperation)
 
 local SocialCreationService = {}
 
@@ -16550,6 +17432,11 @@ local atelierInviteCooldowns: { [string]: number } = {}
 local atelierInviteBlocks: { [Player]: { [number]: number } } = {}
 local atelierStore: any = nil
 local localAtelierWeeks: { [string]: any } = {}
+local playerAddedConnection: RBXScriptConnection? = nil
+local playerRemovingConnection: RBXScriptConnection? = nil
+local lifecycleEpoch = 0
+local persistenceConfig: any = nil
+local sharedStoreDiagnostics = DataStoreOperation.NewDiagnostics()
 
 local ATELIER_WEEK_SECONDS = 7 * 86_400
 local ATELIER_INVITE_SECONDS = 120
@@ -16674,9 +17561,8 @@ local function loadSharedAtelierWeek(atelier: any): any
 		localAtelierWeeks[key] = record
 		return record
 	end
-	local ok, current = pcall(function()
-		return atelierStore:GetAsync(key)
-	end)
+	local ok, current =
+		DataStoreOperation.Read(atelierStore, key, persistenceConfig, sharedStoreDiagnostics)
 	if not ok then
 		return nil
 	end
@@ -16684,6 +17570,9 @@ local function loadSharedAtelierWeek(atelier: any): any
 end
 
 local function hydrateAtelierForPlayer(player: Player): ()
+	if not services or player.Parent ~= Players then
+		return
+	end
 	local profile = services.Data.GetProfile(player)
 	local atelier = if profile then profile.atelier else nil
 	if type(atelier) ~= "table" or type(atelier.id) ~= "string" or atelier.id == "" then
@@ -16724,9 +17613,13 @@ local function recordSharedAtelierRound(player: Player, atelier: any, roundId: s
 
 	local record: any = nil
 	if atelierStore then
-		local ok, result = pcall(function()
-			return atelierStore:UpdateAsync(key, apply)
-		end)
+		local ok, result = DataStoreOperation.Update(
+			atelierStore,
+			key,
+			apply,
+			persistenceConfig,
+			sharedStoreDiagnostics
+		)
 		if not ok or type(result) ~= "table" then
 			warn("[AuraRush/Social] Shared Atelier contribution deferred")
 			return nil
@@ -16959,7 +17852,12 @@ local function createAtelier(player: Player): ()
 	end)
 	services.Analytics.Log(player, "atelier_created", 1, nil)
 	fireMeta(player)
-	task.spawn(hydrateAtelierForPlayer, player)
+	local expectedEpoch = lifecycleEpoch
+	task.spawn(function()
+		if expectedEpoch == lifecycleEpoch then
+			hydrateAtelierForPlayer(player)
+		end
+	end)
 end
 
 local function inviteToAtelier(player: Player, targetUserId: number): ()
@@ -17066,7 +17964,12 @@ local function acceptAtelier(player: Player, atelierId: string): ()
 	end)
 	services.Analytics.Log(player, "atelier_joined", 1, nil)
 	fireMeta(player)
-	task.spawn(hydrateAtelierForPlayer, player)
+	local expectedEpoch = lifecycleEpoch
+	task.spawn(function()
+		if expectedEpoch == lifecycleEpoch then
+			hydrateAtelierForPlayer(player)
+		end
+	end)
 end
 
 local function declineAtelier(player: Player, blockInviter: boolean): ()
@@ -17116,25 +18019,37 @@ local function leaveAtelier(player: Player): ()
 end
 
 local function scheduleAtelierHydration(player: Player): ()
+	local expectedEpoch = lifecycleEpoch
 	task.spawn(function()
 		local deadline = os.clock() + 15
 		while
-			player.Parent == Players
+			expectedEpoch == lifecycleEpoch
+			and services ~= nil
+			and player.Parent == Players
 			and not services.Data.IsLoaded(player)
 			and os.clock() < deadline
 		do
 			task.wait(0.1)
 		end
-		if player.Parent == Players and services.Data.IsLoaded(player) then
+		if
+			expectedEpoch == lifecycleEpoch
+			and services ~= nil
+			and player.Parent == Players
+			and services.Data.IsLoaded(player)
+		then
 			hydrateAtelierForPlayer(player)
 		end
 	end)
 end
 
 function SocialCreationService.Init(context: any): ()
+	SocialCreationService.Destroy()
+	lifecycleEpoch += 1
 	services = context.Services
 	config = context.Config
 	styleCatalog = context.StyleCatalog
+	persistenceConfig = if type(context.Config) == "table" then context.Config.Persistence else nil
+	sharedStoreDiagnostics = DataStoreOperation.NewDiagnostics()
 	atelierStore = nil
 	if not RunService:IsStudio() and game.GameId ~= 0 then
 		local ok, store = pcall(function()
@@ -17190,7 +18105,7 @@ function SocialCreationService.Init(context: any): ()
 			leaveAtelier(player)
 		end
 	end)
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		createdForRound[player] = nil
 		pendingAtelierInvites[player] = nil
 		atelierInviteBlocks[player] = nil
@@ -17209,7 +18124,7 @@ function SocialCreationService.Init(context: any): ()
 			end
 		end
 	end)
-	Players.PlayerAdded:Connect(scheduleAtelierHydration)
+	playerAddedConnection = Players.PlayerAdded:Connect(scheduleAtelierHydration)
 	for _, player in Players:GetPlayers() do
 		scheduleAtelierHydration(player)
 	end
@@ -17235,7 +18150,42 @@ function SocialCreationService.RecordRoundContribution(player: Player): ()
 		id = atelier.id,
 		ownerUserId = atelier.ownerUserId,
 	}
-	task.spawn(recordSharedAtelierRound, player, atelierSnapshot, roundId)
+	local expectedEpoch = lifecycleEpoch
+	task.spawn(function()
+		if expectedEpoch == lifecycleEpoch and services then
+			recordSharedAtelierRound(player, atelierSnapshot, roundId)
+		end
+	end)
+end
+
+function SocialCreationService.Destroy(): ()
+	lifecycleEpoch += 1
+	if playerAddedConnection then
+		playerAddedConnection:Disconnect()
+		playerAddedConnection = nil
+	end
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(recentPostcards)
+	table.clear(recentOrder)
+	table.clear(createdForRound)
+	table.clear(reactions)
+	table.clear(pendingAtelierInvites)
+	table.clear(atelierInviteCooldowns)
+	table.clear(atelierInviteBlocks)
+	table.clear(localAtelierWeeks)
+	atelierStore = nil
+	services = nil
+	config = nil
+	styleCatalog = nil
+	persistenceConfig = nil
+	sharedStoreDiagnostics = DataStoreOperation.NewDiagnostics()
+end
+
+function SocialCreationService.GetSharedPersistenceDiagnostics(): any
+	return DataStoreOperation.Snapshot(sharedStoreDiagnostics)
 end
 
 function SocialCreationService.GetRecent(): { any }
@@ -17267,7 +18217,7 @@ return SocialCreationService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="53">
+        <Item class="ModuleScript" referent="55">
           <Properties>
             <string name="Name">StyleService</string>
             <string name="Source"><![CDATA[--!strict
@@ -17286,6 +18236,7 @@ local progressionService: any = nil
 local analyticsService: any = nil
 local config: any = nil
 local readyPlayers: { [Player]: boolean } = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local VALID_CATEGORIES: { [string]: boolean } = {
 	palette = true,
@@ -17613,6 +18564,7 @@ local function applyAura(character: Model, styleFolder: Folder, color: Color3, a
 end
 
 function StyleService.Init(context: any): ()
+	StyleService.Destroy()
 	dataService = context.Services.Data
 	remoteService = context.Services.Remote
 	styleCatalog = context.StyleCatalog
@@ -17656,7 +18608,7 @@ function StyleService.Init(context: any): ()
 			or (type(payload) == "table" and payload.ready == true)
 	end)
 
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		readyPlayers[player] = nil
 	end)
 end
@@ -17953,11 +18905,26 @@ function StyleService.ResetReady(): ()
 	table.clear(readyPlayers)
 end
 
+function StyleService.Destroy(): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(readyPlayers)
+	dataService = nil
+	remoteService = nil
+	styleCatalog = nil
+	economyService = nil
+	progressionService = nil
+	analyticsService = nil
+	config = nil
+end
+
 return StyleService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="54">
+        <Item class="ModuleScript" referent="56">
           <Properties>
             <string name="Name">WorldService</string>
             <string name="Source"><![CDATA[--!strict
@@ -21976,11 +22943,215 @@ return WorldService
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="55">
+      <Item class="Folder" referent="57">
         <Properties>
           <string name="Name">Util</string>
         </Properties>
-        <Item class="ModuleScript" referent="56">
+        <Item class="ModuleScript" referent="58">
+          <Properties>
+            <string name="Name">DataStoreOperation</string>
+            <string name="Source"><![CDATA[--!strict
+
+-- Shared guard for small, server-owned DataStore records outside the player
+-- profile. Callers still own idempotency: an UpdateAsync failure can have an
+-- unknown final state, so every retried transform must tolerate replay.
+local DataStoreService = game:GetService("DataStoreService")
+
+local DataStoreRetry = require(script.Parent.DataStoreRetry)
+
+local DataStoreOperation = {}
+
+export type Diagnostics = {
+	requests: number,
+	attempts: number,
+	retries: number,
+	failures: number,
+	budgetWaits: number,
+}
+
+local function requestType(name: string): any
+	local requestTypes: any = Enum.DataStoreRequestType
+	local ok, result = pcall(function()
+		return requestTypes[name]
+	end)
+	return if ok and typeof(result) == "EnumItem" then result else nil
+end
+
+local function setting(config: any, primary: string, secondary: string, fallback: number): number
+	local value = if type(config) == "table" then config[primary] else nil
+	if value == nil and type(config) == "table" then
+		value = config[secondary]
+	end
+	local numberValue = tonumber(value)
+	if numberValue == nil or numberValue ~= numberValue or numberValue == math.huge then
+		return fallback
+	end
+	return numberValue
+end
+
+local function retryPolicy(config: any): any
+	return {
+		maxAttempts = math.clamp(
+			math.floor(setting(config, "MaximumAttempts", "maxAttempts", 3)),
+			1,
+			8
+		),
+		initialDelaySeconds = math.clamp(
+			setting(config, "InitialRetryDelaySeconds", "initialDelaySeconds", 0.35),
+			0,
+			5
+		),
+		backoffMultiplier = math.clamp(
+			setting(config, "BackoffMultiplier", "backoffMultiplier", 2),
+			1,
+			4
+		),
+		maximumDelaySeconds = math.clamp(
+			setting(config, "MaximumRetryDelaySeconds", "maximumDelaySeconds", 1.5),
+			0,
+			15
+		),
+	}
+end
+
+local function shouldRetry(failure: any, _attempt: number): boolean
+	local message = string.lower(tostring(failure))
+	for _, token in
+		{
+			"keynameempty",
+			"keynamelimit",
+			"valuenotallowed",
+			"studioaccesstoapisnotallowed",
+			"datamodelnoaccess",
+			"luawebsrvsnoaccess",
+			"invalidargument",
+		}
+	do
+		if string.find(message, token, 1, true) then
+			return false
+		end
+	end
+	return true
+end
+
+local function hasBudget(operation: "Read" | "Update"): boolean
+	local standardRead = requestType("StandardRead")
+	local standardWrite = requestType("StandardWrite")
+	if standardRead then
+		if DataStoreService:GetRequestBudgetForRequestType(standardRead) <= 0 then
+			return false
+		end
+		if operation == "Read" or standardWrite == nil then
+			return true
+		end
+		return DataStoreService:GetRequestBudgetForRequestType(standardWrite) > 0
+	end
+	local legacy = requestType(if operation == "Read" then "GetAsync" else "UpdateAsync")
+	return if legacy then DataStoreService:GetRequestBudgetForRequestType(legacy) > 0 else true
+end
+
+local function waitForBudget(
+	operation: "Read" | "Update",
+	config: any,
+	diagnostics: Diagnostics
+): boolean
+	local maximumWait = math.clamp(
+		setting(config, "RequestBudgetWaitSeconds", "requestBudgetWaitSeconds", 2),
+		0,
+		10
+	)
+	local pollSeconds = math.clamp(
+		setting(config, "RequestBudgetPollSeconds", "requestBudgetPollSeconds", 0.1),
+		0.05,
+		1
+	)
+	local deadline = os.clock() + maximumWait
+	local waited = false
+	while true do
+		local ok, available = pcall(hasBudget, operation)
+		if not ok or available then
+			if waited then
+				diagnostics.budgetWaits += 1
+			end
+			return true
+		end
+		if os.clock() >= deadline then
+			if waited then
+				diagnostics.budgetWaits += 1
+			end
+			return false
+		end
+		waited = true
+		task.wait(math.min(pollSeconds, math.max(0, deadline - os.clock())))
+	end
+end
+
+function DataStoreOperation.NewDiagnostics(): Diagnostics
+	return {
+		requests = 0,
+		attempts = 0,
+		retries = 0,
+		failures = 0,
+		budgetWaits = 0,
+	}
+end
+
+function DataStoreOperation.Snapshot(diagnostics: Diagnostics?): Diagnostics
+	if not diagnostics then
+		return DataStoreOperation.NewDiagnostics()
+	end
+	return table.clone(diagnostics)
+end
+
+function DataStoreOperation.Run<T>(
+	operation: "Read" | "Update",
+	callback: () -> T,
+	config: any,
+	diagnostics: Diagnostics
+): (boolean, T | any)
+	diagnostics.requests += 1
+	local ok, result, attempts = DataStoreRetry.Run(function()
+		if not waitForBudget(operation, config, diagnostics) then
+			error("DataStore request budget unavailable", 0)
+		end
+		return callback()
+	end, retryPolicy(config), shouldRetry)
+	diagnostics.attempts += attempts
+	diagnostics.retries += math.max(0, attempts - 1)
+	if not ok then
+		diagnostics.failures += 1
+	end
+	return ok, result
+end
+
+function DataStoreOperation.Read(
+	store: any,
+	key: string,
+	config: any,
+	diagnostics: Diagnostics
+): (boolean, any)
+	return DataStoreOperation.Run("Read", function()
+		return store:GetAsync(key)
+	end, config, diagnostics)
+end
+
+function DataStoreOperation.Update(
+	store: any,
+	key: string,
+	transform: (current: any) -> any,
+	config: any,
+	diagnostics: Diagnostics
+): (boolean, any)
+	return DataStoreOperation.Run("Update", function()
+		return store:UpdateAsync(key, transform)
+	end, config, diagnostics)
+end
+
+return table.freeze(DataStoreOperation)
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="59">
           <Properties>
             <string name="Name">DataStoreRetry</string>
             <string name="Source"><![CDATA[--!strict
@@ -22070,7 +23241,7 @@ return DataStoreRetry
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="57">
+        <Item class="ModuleScript" referent="60">
           <Properties>
             <string name="Name">LifecycleStack</string>
             <string name="Source"><![CDATA[--!strict
@@ -22146,21 +23317,21 @@ return LifecycleStack
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="58">
+  <Item class="StarterPlayer" referent="61">
     <Properties>
       <string name="Name">StarterPlayer</string>
       <float name="CharacterWalkSpeed">18</float>
       <bool name="EnableMouseLockOption">false</bool>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="59">
+    <Item class="StarterPlayerScripts" referent="62">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="60">
+      <Item class="Folder" referent="63">
         <Properties>
           <string name="Name">AuraRushClient</string>
         </Properties>
-        <Item class="LocalScript" referent="61">
+        <Item class="LocalScript" referent="64">
           <Properties>
             <string name="Name">Bootstrap</string>
             <string name="Source"><![CDATA[--!strict
@@ -22199,6 +23370,7 @@ local function boot(): ()
 	local FirstMiracleController = require(script.Parent.Controllers.FirstMiracleController)
 	local MetaPanelController = require(script.Parent.Controllers.MetaPanelController)
 	local RemixController = require(script.Parent.Controllers.RemixController)
+	local AdminDashboardController = require(script.Parent.Controllers.AdminDashboardController)
 
 	local remotes = RemoteRegistry.new()
 	if not remotes:IsReady() then
@@ -22245,6 +23417,7 @@ local function boot(): ()
 	local socialInviteController = SocialInviteController.new(app)
 	local storeController = StoreController.new(app)
 	local remixController = RemixController.new(app, remotes)
+	local adminDashboardController = AdminDashboardController.new(app, remotes, playerGui)
 	local roundController = RoundController.new(app, remotes)
 
 	local bootDurationMilliseconds =
@@ -22275,6 +23448,7 @@ local function boot(): ()
 		socialInviteController:Destroy()
 		storeController:Destroy()
 		remixController:Destroy()
+		adminDashboardController:Destroy()
 		metaPanelController:Destroy()
 		firstMiracleController:Destroy()
 		featureFlagController:Destroy()
@@ -22294,11 +23468,472 @@ end
 ]]></string>
           </Properties>
         </Item>
-        <Item class="Folder" referent="62">
+        <Item class="Folder" referent="65">
           <Properties>
             <string name="Name">Controllers</string>
           </Properties>
-          <Item class="ModuleScript" referent="63">
+          <Item class="ModuleScript" referent="66">
+            <Properties>
+              <string name="Name">AdminDashboardController</string>
+              <string name="Source"><![CDATA[--!strict
+
+local UserInputService = game:GetService("UserInputService")
+
+local AppModule = require(script.Parent.Parent.UI.App)
+local StyleOS = require(script.Parent.Parent.UI.StyleOS)
+local Theme = require(script.Parent.Parent.UI.Theme)
+local RemoteRegistryModule = require(script.Parent.RemoteRegistry)
+
+type App = AppModule.App
+type RemoteRegistry = RemoteRegistryModule.RemoteRegistry
+type AnyMap = { [string]: any }
+
+local AdminDashboardController = {}
+AdminDashboardController.__index = AdminDashboardController
+
+export type AdminDashboardController = typeof(setmetatable(
+	{} :: {
+		App: App,
+		Remotes: RemoteRegistry,
+		PlayerGui: PlayerGui,
+		Connections: { RBXScriptConnection },
+		ScreenGui: ScreenGui?,
+		OpenButton: TextButton?,
+		Overlay: TextButton?,
+		Panel: Frame?,
+		Summary: TextLabel?,
+		Audit: TextLabel?,
+		AnnouncementButtons: { TextButton },
+		Snapshot: AnyMap?,
+		Refreshing: boolean,
+		Destroyed: boolean,
+	},
+	AdminDashboardController
+))
+
+local function createLabel(parent: Instance, name: string, text: string, size: number): TextLabel
+	local label = Instance.new("TextLabel")
+	label.Name = name
+	label.Text = text
+	label.ZIndex = 212
+	Theme.styleText(label, size, Theme.Fonts.Regular)
+	label.Parent = parent
+	return label
+end
+
+local function createButton(
+	parent: Instance,
+	name: string,
+	text: string,
+	variant: Theme.ButtonVariant?
+): TextButton
+	local button = Instance.new("TextButton")
+	button.Name = name
+	button.Text = text
+	button.ZIndex = 213
+	Theme.styleButton(button, variant)
+	StyleOS.makePressable(button, text)
+	button.Parent = parent
+	return button
+end
+
+local function number(value: any): number
+	return math.max(0, math.floor(tonumber(value) or 0))
+end
+
+local function text(value: any, fallback: string): string
+	return if type(value) == "string" and value ~= "" then value else fallback
+end
+
+local function hasPermission(snapshot: AnyMap?, permission: string): boolean
+	if not snapshot or type(snapshot.permissions) ~= "table" then
+		return false
+	end
+	for _, value in snapshot.permissions do
+		if value == permission then
+			return true
+		end
+	end
+	return false
+end
+
+function AdminDashboardController.new(
+	app: App,
+	remotes: RemoteRegistry,
+	playerGui: PlayerGui
+): AdminDashboardController
+	local self: AdminDashboardController = setmetatable({
+		App = app,
+		Remotes = remotes,
+		PlayerGui = playerGui,
+		Connections = {},
+		ScreenGui = nil,
+		OpenButton = nil,
+		Overlay = nil,
+		Panel = nil,
+		Summary = nil,
+		Audit = nil,
+		AnnouncementButtons = {},
+		Snapshot = nil,
+		Refreshing = false,
+		Destroyed = false,
+	}, AdminDashboardController)
+
+	local update = remotes:GetEvent("AdminUpdate")
+	if update then
+		table.insert(
+			self.Connections,
+			update.OnClientEvent:Connect(function(payload: any)
+				if type(payload) == "table" and type(payload.data) == "table" then
+					self:_applySnapshot(payload.data)
+					if payload.result == "ok" then
+						self.App:ShowToast("toast.admin_action_done", "Success")
+					elseif type(payload.result) == "string" and payload.result ~= "" then
+						self.App:ShowToast("toast.admin_action_blocked", "Warning")
+					end
+				end
+			end)
+		)
+	end
+	task.defer(function()
+		self:Refresh()
+	end)
+	return self
+end
+
+function AdminDashboardController:_build(): ()
+	if self.ScreenGui or self.Destroyed then
+		return
+	end
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "AuraRushAdminDashboard"
+	screenGui.DisplayOrder = 210
+	screenGui.IgnoreGuiInset = true
+	screenGui.ResetOnSpawn = false
+	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	screenGui.Parent = self.PlayerGui
+	self.ScreenGui = screenGui
+
+	local openButton = createButton(screenGui, "Open", "OPS", "Quiet")
+	openButton.AnchorPoint = Vector2.new(1, 0)
+	openButton.Position = UDim2.new(1, -16, 0, 72)
+	openButton.Size = UDim2.fromOffset(58, 48)
+	openButton.TextSize = 13
+	openButton.ZIndex = 211
+	self.OpenButton = openButton
+
+	local overlay = Instance.new("TextButton")
+	overlay.Name = "Overlay"
+	overlay.Text = ""
+	overlay.AutoButtonColor = false
+	overlay.Visible = false
+	overlay.Size = UDim2.fromScale(1, 1)
+	overlay.BackgroundColor3 = Theme.Colors.Black
+	overlay.BackgroundTransparency = 0.35
+	overlay.BorderSizePixel = 0
+	overlay.ZIndex = 211
+	overlay.Parent = screenGui
+	self.Overlay = overlay
+	self.App:TrackPrimaryOverlay(overlay)
+
+	local panel = Instance.new("Frame")
+	panel.Name = "Panel"
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+	panel.Size = UDim2.new(1, -24, 1, -32)
+	panel.BackgroundColor3 = Theme.Colors.BackgroundSoft
+	panel.BorderSizePixel = 0
+	panel.Visible = false
+	panel.ZIndex = 212
+	Theme.addCorner(panel, Theme.Radius.Large)
+	Theme.addStroke(panel, Theme.Colors.Lime, 0.38)
+	local constraint = Instance.new("UISizeConstraint")
+	constraint.MinSize = Vector2.new(286, 280)
+	constraint.MaxSize = Vector2.new(560, 660)
+	constraint.Parent = panel
+	panel.Parent = screenGui
+	self.Panel = panel
+
+	local header = createLabel(
+		panel,
+		"Header",
+		"ОПЕРАЦИОННЫЙ ЦЕНТР",
+		Theme.TextSizes.Subtitle
+	)
+	header.Font = Theme.Fonts.Bold
+	header.Position = UDim2.fromOffset(18, 14)
+	header.Size = UDim2.new(1, -128, 0, 32)
+	header.TextColor3 = Theme.Colors.Lime
+
+	local close = createButton(panel, "Close", "Закрыть", "Quiet")
+	close.AnchorPoint = Vector2.new(1, 0)
+	close.Position = UDim2.new(1, -14, 0, 12)
+	close.Size = UDim2.fromOffset(88, 36)
+
+	-- The operation view is deliberately scrollable. On a landscape phone the
+	-- health, audit and action rows must never overlap or fall below the safe
+	-- area; a compact panel simply scrolls its content instead.
+	local content = Instance.new("ScrollingFrame")
+	content.Name = "Content"
+	content.Position = UDim2.fromOffset(14, 58)
+	content.Size = UDim2.new(1, -28, 1, -72)
+	content.BackgroundTransparency = 1
+	content.BorderSizePixel = 0
+	content.CanvasSize = UDim2.fromOffset(0, 0)
+	content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	content.ScrollingDirection = Enum.ScrollingDirection.Y
+	content.ScrollBarThickness = 4
+	content.ScrollBarImageColor3 = Theme.Colors.Lime
+	content.ZIndex = 212
+	content.Parent = panel
+	local contentPadding = Instance.new("UIPadding")
+	contentPadding.PaddingRight = UDim.new(0, 6)
+	contentPadding.PaddingBottom = UDim.new(0, 4)
+	contentPadding.Parent = content
+	local contentLayout = Instance.new("UIListLayout")
+	contentLayout.Padding = UDim.new(0, 10)
+	contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	contentLayout.Parent = content
+
+	local summary = createLabel(
+		content,
+		"Summary",
+		"Собираем состояние сервера…",
+		Theme.TextSizes.Body
+	)
+	summary.LayoutOrder = 1
+	summary.Size = UDim2.new(1, -8, 0, 142)
+	summary.TextColor3 = Theme.Colors.Text
+	summary.TextYAlignment = Enum.TextYAlignment.Top
+	self.Summary = summary
+
+	local audit = createLabel(
+		content,
+		"Audit",
+		"Последние действия: нет данных",
+		Theme.TextSizes.Caption
+	)
+	audit.LayoutOrder = 2
+	audit.Size = UDim2.new(1, -8, 0, 84)
+	audit.TextColor3 = Theme.Colors.TextMuted
+	audit.TextYAlignment = Enum.TextYAlignment.Top
+	self.Audit = audit
+
+	local actions = Instance.new("Frame")
+	actions.Name = "Actions"
+	actions.LayoutOrder = 3
+	actions.Size = UDim2.new(1, -8, 0, 126)
+	actions.BackgroundTransparency = 1
+	actions.ZIndex = 212
+	actions.Parent = content
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 8)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = actions
+
+	local refresh =
+		createButton(actions, "Refresh", "Обновить состояние", "Secondary")
+	refresh.Size = UDim2.new(1, 0, 0, 36)
+	local maintenance =
+		createButton(actions, "Maintenance", "Сообщить: скоро перерыв", "Quiet")
+	maintenance.Size = UDim2.new(1, 0, 0, 36)
+	maintenance:SetAttribute("TemplateId", "maintenance_soon")
+	local updateReady = createButton(
+		actions,
+		"UpdateReady",
+		"Сообщить: обновление готово",
+		"Quiet"
+	)
+	updateReady.Size = UDim2.new(1, 0, 0, 36)
+	updateReady:SetAttribute("TemplateId", "update_ready")
+	self.AnnouncementButtons = { maintenance, updateReady }
+
+	table.insert(
+		self.Connections,
+		openButton.Activated:Connect(function()
+			self:SetVisible(true)
+			self:Refresh()
+		end)
+	)
+	table.insert(
+		self.Connections,
+		close.Activated:Connect(function()
+			self:SetVisible(false)
+		end)
+	)
+	table.insert(
+		self.Connections,
+		overlay.Activated:Connect(function()
+			self:SetVisible(false)
+		end)
+	)
+	table.insert(
+		self.Connections,
+		refresh.Activated:Connect(function()
+			self:Refresh()
+		end)
+	)
+	for _, button in self.AnnouncementButtons do
+		table.insert(
+			self.Connections,
+			button.Activated:Connect(function()
+				self:_broadcast(text(button:GetAttribute("TemplateId"), ""))
+			end)
+		)
+	end
+	table.insert(
+		self.Connections,
+		UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+			if processed or input.KeyCode ~= Enum.KeyCode.F8 then
+				return
+			end
+			self:SetVisible(not (self.Panel and self.Panel.Visible == true))
+		end)
+	)
+end
+
+function AdminDashboardController:_render(): ()
+	local snapshot = self.Snapshot
+	if not snapshot or not self.Summary then
+		return
+	end
+	local server = if type(snapshot.server) == "table" then snapshot.server else {}
+	local round = if type(snapshot.round) == "table" then snapshot.round else {}
+	local network = if type(snapshot.network) == "table" then snapshot.network else {}
+	local persistence = if type(snapshot.persistence) == "table" then snapshot.persistence else {}
+	local performance = if type(snapshot.performance) == "table" then snapshot.performance else {}
+	self.Summary.Text = string.format(
+		"Роль: %s\nСервер: %s · %s\nИгроки: %d/%d · раунд: %s\nСеть: %d принято · %d отклонено\nДанные: %d запросов · %d повторов · %d ошибок\nHeartbeat p95: %.1f мс · uptime: %d с",
+		text(snapshot.roleLabel, "Сотрудник"),
+		text(server.state, "unknown"),
+		text(server.step, "unknown"),
+		number(server.players),
+		number(server.maximumPlayers),
+		text(round.state, "unknown"),
+		number(network.accepted),
+		number(network.rejected),
+		number(persistence.requests),
+		number(persistence.retries),
+		number(persistence.failures),
+		tonumber(performance.heartbeatP95Milliseconds) or 0,
+		number(server.uptimeSeconds)
+	)
+
+	if self.Audit then
+		local entries = if type(snapshot.audit) == "table" then snapshot.audit else {}
+		local lines = { "Последние действия:" }
+		for index = math.max(1, #entries - 2), #entries do
+			local entry = entries[index]
+			if type(entry) == "table" then
+				table.insert(
+					lines,
+					string.format(
+						"• %s — %s (%s)",
+						text(entry.actor, "сотрудник"),
+						text(entry.action, "действие"),
+						text(entry.result, "ok")
+					)
+				)
+			end
+		end
+		if #lines == 1 then
+			table.insert(lines, "• Пока нет действий в этой сессии")
+		end
+		self.Audit.Text = table.concat(lines, "\n")
+	end
+	local canBroadcast = hasPermission(snapshot, "broadcast_announcement")
+	for _, button in self.AnnouncementButtons do
+		button.Visible = canBroadcast
+		button.Active = canBroadcast
+		button.Selectable = canBroadcast
+	end
+end
+
+function AdminDashboardController:_applySnapshot(snapshot: AnyMap): ()
+	if self.Destroyed or snapshot.authorized ~= true then
+		if self.ScreenGui then
+			self.ScreenGui:Destroy()
+			self.ScreenGui = nil
+		end
+		return
+	end
+	self.Snapshot = snapshot
+	self:_build()
+	self:_render()
+end
+
+function AdminDashboardController:Refresh(): ()
+	if self.Destroyed or self.Refreshing then
+		return
+	end
+	local request = self.Remotes:GetFunction("RequestAdminSnapshot")
+	if not request then
+		return
+	end
+	self.Refreshing = true
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return request:InvokeServer({})
+		end)
+		self.Refreshing = false
+		if self.Destroyed then
+			return
+		end
+		if ok and type(result) == "table" then
+			self:_applySnapshot(result)
+		end
+	end)
+end
+
+function AdminDashboardController:_broadcast(templateId: string): ()
+	if
+		self.Destroyed
+		or templateId == ""
+		or not hasPermission(self.Snapshot, "broadcast_announcement")
+	then
+		return
+	end
+	local remote = self.Remotes:GetEvent("AdminAction")
+	if not remote then
+		return
+	end
+	remote:FireServer({
+		action = "BroadcastTemplate",
+		templateId = templateId,
+		confirmed = true,
+	})
+end
+
+function AdminDashboardController.SetVisible(self: AdminDashboardController, visible: boolean): ()
+	if self.Destroyed or not self.Overlay or not self.Panel then
+		return
+	end
+	self.Overlay.Visible = visible
+	self.Panel.Visible = visible
+end
+
+function AdminDashboardController.Destroy(self: AdminDashboardController): ()
+	if self.Destroyed then
+		return
+	end
+	self.Destroyed = true
+	for _, connection in self.Connections do
+		connection:Disconnect()
+	end
+	table.clear(self.Connections)
+	if self.ScreenGui then
+		self.ScreenGui:Destroy()
+		self.ScreenGui = nil
+	end
+	table.clear(self.AnnouncementButtons)
+	self.Snapshot = nil
+end
+
+return AdminDashboardController
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="67">
             <Properties>
               <string name="Name">AudioDirector</string>
               <string name="Source"><![CDATA[--!strict
@@ -22852,7 +24487,7 @@ return AudioDirector
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="64">
+          <Item class="ModuleScript" referent="68">
             <Properties>
               <string name="Name">AvatarPreviewController</string>
               <string name="Source"><![CDATA[--!strict
@@ -23111,7 +24746,7 @@ return AvatarPreviewController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="65">
+          <Item class="ModuleScript" referent="69">
             <Properties>
               <string name="Name">CameraController</string>
               <string name="Source"><![CDATA[--!strict
@@ -24002,7 +25637,7 @@ return CameraController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="66">
+          <Item class="ModuleScript" referent="70">
             <Properties>
               <string name="Name">CaptureController</string>
               <string name="Source"><![CDATA[--!strict
@@ -24146,7 +25781,7 @@ return CaptureController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="67">
+          <Item class="ModuleScript" referent="71">
             <Properties>
               <string name="Name">ClientFeatureFlagController</string>
               <string name="Source"><![CDATA[--!strict
@@ -24272,7 +25907,7 @@ return ClientFeatureFlagController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="68">
+          <Item class="ModuleScript" referent="72">
             <Properties>
               <string name="Name">FirstMiracleController</string>
               <string name="Source"><![CDATA[--!strict
@@ -25174,7 +26809,7 @@ return FirstMiracleController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="69">
+          <Item class="ModuleScript" referent="73">
             <Properties>
               <string name="Name">InputController</string>
               <string name="Source"><![CDATA[--!strict
@@ -25512,7 +27147,7 @@ return InputController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="70">
+          <Item class="ModuleScript" referent="74">
             <Properties>
               <string name="Name">MetaPanelController</string>
               <string name="Source"><![CDATA[--!strict
@@ -27014,7 +28649,7 @@ return MetaPanelController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="71">
+          <Item class="ModuleScript" referent="75">
             <Properties>
               <string name="Name">PoseController</string>
               <string name="Source"><![CDATA[--!strict
@@ -27182,7 +28817,7 @@ return PoseController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="72">
+          <Item class="ModuleScript" referent="76">
             <Properties>
               <string name="Name">RemixController</string>
               <string name="Source"><![CDATA[--!strict
@@ -27347,7 +28982,7 @@ return RemixController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="73">
+          <Item class="ModuleScript" referent="77">
             <Properties>
               <string name="Name">RemoteRegistry</string>
               <string name="Source"><![CDATA[--!strict
@@ -27484,7 +29119,7 @@ return RemoteRegistry
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="74">
+          <Item class="ModuleScript" referent="78">
             <Properties>
               <string name="Name">RoundController</string>
               <string name="Source"><![CDATA[--!strict
@@ -27818,7 +29453,7 @@ return RoundController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="75">
+          <Item class="ModuleScript" referent="79">
             <Properties>
               <string name="Name">SocialInviteController</string>
               <string name="Source"><![CDATA[--!strict
@@ -27903,7 +29538,7 @@ return SocialInviteController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="76">
+          <Item class="ModuleScript" referent="80">
             <Properties>
               <string name="Name">StoreController</string>
               <string name="Source"><![CDATA[--!strict
@@ -28566,7 +30201,7 @@ return StoreController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="77">
+          <Item class="ModuleScript" referent="81">
             <Properties>
               <string name="Name">StyleController</string>
               <string name="Source"><![CDATA[--!strict
@@ -29093,7 +30728,7 @@ return StyleController
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="78">
+          <Item class="ModuleScript" referent="82">
             <Properties>
               <string name="Name">VfxDirector</string>
               <string name="Source"><![CDATA[--!strict
@@ -29876,11 +31511,11 @@ return VfxDirector
             </Properties>
           </Item>
         </Item>
-        <Item class="Folder" referent="79">
+        <Item class="Folder" referent="83">
           <Properties>
             <string name="Name">UI</string>
           </Properties>
-          <Item class="ModuleScript" referent="80">
+          <Item class="ModuleScript" referent="84">
             <Properties>
               <string name="Name">App</string>
               <string name="Source"><![CDATA[--!strict
@@ -33420,7 +35055,7 @@ return App
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="81">
+          <Item class="ModuleScript" referent="85">
             <Properties>
               <string name="Name">Components</string>
               <string name="Source"><![CDATA[--!strict
@@ -33567,7 +35202,7 @@ return table.freeze(Components)
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="82">
+          <Item class="ModuleScript" referent="86">
             <Properties>
               <string name="Name">PresentationPolicy</string>
               <string name="Source"><![CDATA[--!strict
@@ -33600,7 +35235,7 @@ return table.freeze(PresentationPolicy)
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="83">
+          <Item class="ModuleScript" referent="87">
             <Properties>
               <string name="Name">RemixOverlay</string>
               <string name="Source"><![CDATA[--!strict
@@ -34448,7 +36083,7 @@ return RemixOverlay
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="84">
+          <Item class="ModuleScript" referent="88">
             <Properties>
               <string name="Name">StyleOS</string>
               <string name="Source"><![CDATA[--!strict
@@ -34674,7 +36309,7 @@ return table.freeze(StyleOS)
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="85">
+          <Item class="ModuleScript" referent="89">
             <Properties>
               <string name="Name">Theme</string>
               <string name="Source"><![CDATA[--!strict
@@ -34927,7 +36562,7 @@ return table.freeze(Theme)
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="86">
+          <Item class="ModuleScript" referent="90">
             <Properties>
               <string name="Name">VisualItemTile</string>
               <string name="Source"><![CDATA[--!strict
@@ -35177,7 +36812,7 @@ return table.freeze(VisualItemTile)
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="87">
+  <Item class="Workspace" referent="91">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">196.2</float>

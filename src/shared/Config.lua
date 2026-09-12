@@ -174,6 +174,34 @@ local Config = {
 		AnnouncementTopic = "AuraRush_LiveOps_v2",
 	}),
 
+	-- Staff access is deliberately deny-by-default. Fill the owner IDs and/or
+	-- group ID only in reviewed production configuration; no client can grant
+	-- itself a role through the admin dashboard.
+	Admin = table.freeze({
+		Enabled = true,
+		OwnerUserIds = table.freeze({}),
+		GroupId = 0,
+		GroupRanks = table.freeze({
+			Admin = 200,
+			Moderator = 100,
+			Support = 50,
+		}),
+		AuditCapacity = 80,
+		BroadcastCooldownSeconds = 20,
+		AnnouncementTemplates = table.freeze({
+			table.freeze({
+				id = "maintenance_soon",
+				toastKey = "toast.admin_notice_maintenance_soon",
+				tone = "Warning",
+			}),
+			table.freeze({
+				id = "update_ready",
+				toastKey = "toast.admin_notice_update_ready",
+				tone = "Success",
+			}),
+		}),
+	}),
+
 	DataLimits = table.freeze({
 		MaximumSavedLooks = 20,
 		MaximumLookNameLength = 24,

@@ -5,6 +5,8 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
+local DataStoreOperation = require(script.Parent.Parent.Util.DataStoreOperation)
+
 local SocialCreationService = {}
 
 local services: any = nil
@@ -19,6 +21,11 @@ local atelierInviteCooldowns: { [string]: number } = {}
 local atelierInviteBlocks: { [Player]: { [number]: number } } = {}
 local atelierStore: any = nil
 local localAtelierWeeks: { [string]: any } = {}
+local playerAddedConnection: RBXScriptConnection? = nil
+local playerRemovingConnection: RBXScriptConnection? = nil
+local lifecycleEpoch = 0
+local persistenceConfig: any = nil
+local sharedStoreDiagnostics = DataStoreOperation.NewDiagnostics()
 
 local ATELIER_WEEK_SECONDS = 7 * 86_400
 local ATELIER_INVITE_SECONDS = 120
@@ -143,9 +150,8 @@ local function loadSharedAtelierWeek(atelier: any): any
 		localAtelierWeeks[key] = record
 		return record
 	end
-	local ok, current = pcall(function()
-		return atelierStore:GetAsync(key)
-	end)
+	local ok, current =
+		DataStoreOperation.Read(atelierStore, key, persistenceConfig, sharedStoreDiagnostics)
 	if not ok then
 		return nil
 	end
@@ -153,6 +159,9 @@ local function loadSharedAtelierWeek(atelier: any): any
 end
 
 local function hydrateAtelierForPlayer(player: Player): ()
+	if not services or player.Parent ~= Players then
+		return
+	end
 	local profile = services.Data.GetProfile(player)
 	local atelier = if profile then profile.atelier else nil
 	if type(atelier) ~= "table" or type(atelier.id) ~= "string" or atelier.id == "" then
@@ -193,9 +202,13 @@ local function recordSharedAtelierRound(player: Player, atelier: any, roundId: s
 
 	local record: any = nil
 	if atelierStore then
-		local ok, result = pcall(function()
-			return atelierStore:UpdateAsync(key, apply)
-		end)
+		local ok, result = DataStoreOperation.Update(
+			atelierStore,
+			key,
+			apply,
+			persistenceConfig,
+			sharedStoreDiagnostics
+		)
 		if not ok or type(result) ~= "table" then
 			warn("[AuraRush/Social] Shared Atelier contribution deferred")
 			return nil
@@ -428,7 +441,12 @@ local function createAtelier(player: Player): ()
 	end)
 	services.Analytics.Log(player, "atelier_created", 1, nil)
 	fireMeta(player)
-	task.spawn(hydrateAtelierForPlayer, player)
+	local expectedEpoch = lifecycleEpoch
+	task.spawn(function()
+		if expectedEpoch == lifecycleEpoch then
+			hydrateAtelierForPlayer(player)
+		end
+	end)
 end
 
 local function inviteToAtelier(player: Player, targetUserId: number): ()
@@ -535,7 +553,12 @@ local function acceptAtelier(player: Player, atelierId: string): ()
 	end)
 	services.Analytics.Log(player, "atelier_joined", 1, nil)
 	fireMeta(player)
-	task.spawn(hydrateAtelierForPlayer, player)
+	local expectedEpoch = lifecycleEpoch
+	task.spawn(function()
+		if expectedEpoch == lifecycleEpoch then
+			hydrateAtelierForPlayer(player)
+		end
+	end)
 end
 
 local function declineAtelier(player: Player, blockInviter: boolean): ()
@@ -585,25 +608,37 @@ local function leaveAtelier(player: Player): ()
 end
 
 local function scheduleAtelierHydration(player: Player): ()
+	local expectedEpoch = lifecycleEpoch
 	task.spawn(function()
 		local deadline = os.clock() + 15
 		while
-			player.Parent == Players
+			expectedEpoch == lifecycleEpoch
+			and services ~= nil
+			and player.Parent == Players
 			and not services.Data.IsLoaded(player)
 			and os.clock() < deadline
 		do
 			task.wait(0.1)
 		end
-		if player.Parent == Players and services.Data.IsLoaded(player) then
+		if
+			expectedEpoch == lifecycleEpoch
+			and services ~= nil
+			and player.Parent == Players
+			and services.Data.IsLoaded(player)
+		then
 			hydrateAtelierForPlayer(player)
 		end
 	end)
 end
 
 function SocialCreationService.Init(context: any): ()
+	SocialCreationService.Destroy()
+	lifecycleEpoch += 1
 	services = context.Services
 	config = context.Config
 	styleCatalog = context.StyleCatalog
+	persistenceConfig = if type(context.Config) == "table" then context.Config.Persistence else nil
+	sharedStoreDiagnostics = DataStoreOperation.NewDiagnostics()
 	atelierStore = nil
 	if not RunService:IsStudio() and game.GameId ~= 0 then
 		local ok, store = pcall(function()
@@ -659,7 +694,7 @@ function SocialCreationService.Init(context: any): ()
 			leaveAtelier(player)
 		end
 	end)
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		createdForRound[player] = nil
 		pendingAtelierInvites[player] = nil
 		atelierInviteBlocks[player] = nil
@@ -678,7 +713,7 @@ function SocialCreationService.Init(context: any): ()
 			end
 		end
 	end)
-	Players.PlayerAdded:Connect(scheduleAtelierHydration)
+	playerAddedConnection = Players.PlayerAdded:Connect(scheduleAtelierHydration)
 	for _, player in Players:GetPlayers() do
 		scheduleAtelierHydration(player)
 	end
@@ -704,7 +739,42 @@ function SocialCreationService.RecordRoundContribution(player: Player): ()
 		id = atelier.id,
 		ownerUserId = atelier.ownerUserId,
 	}
-	task.spawn(recordSharedAtelierRound, player, atelierSnapshot, roundId)
+	local expectedEpoch = lifecycleEpoch
+	task.spawn(function()
+		if expectedEpoch == lifecycleEpoch and services then
+			recordSharedAtelierRound(player, atelierSnapshot, roundId)
+		end
+	end)
+end
+
+function SocialCreationService.Destroy(): ()
+	lifecycleEpoch += 1
+	if playerAddedConnection then
+		playerAddedConnection:Disconnect()
+		playerAddedConnection = nil
+	end
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(recentPostcards)
+	table.clear(recentOrder)
+	table.clear(createdForRound)
+	table.clear(reactions)
+	table.clear(pendingAtelierInvites)
+	table.clear(atelierInviteCooldowns)
+	table.clear(atelierInviteBlocks)
+	table.clear(localAtelierWeeks)
+	atelierStore = nil
+	services = nil
+	config = nil
+	styleCatalog = nil
+	persistenceConfig = nil
+	sharedStoreDiagnostics = DataStoreOperation.NewDiagnostics()
+end
+
+function SocialCreationService.GetSharedPersistenceDiagnostics(): any
+	return DataStoreOperation.Snapshot(sharedStoreDiagnostics)
 end
 
 function SocialCreationService.GetRecent(): { any }

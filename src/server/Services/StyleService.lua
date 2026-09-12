@@ -14,6 +14,7 @@ local progressionService: any = nil
 local analyticsService: any = nil
 local config: any = nil
 local readyPlayers: { [Player]: boolean } = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local VALID_CATEGORIES: { [string]: boolean } = {
 	palette = true,
@@ -341,6 +342,7 @@ local function applyAura(character: Model, styleFolder: Folder, color: Color3, a
 end
 
 function StyleService.Init(context: any): ()
+	StyleService.Destroy()
 	dataService = context.Services.Data
 	remoteService = context.Services.Remote
 	styleCatalog = context.StyleCatalog
@@ -384,7 +386,7 @@ function StyleService.Init(context: any): ()
 			or (type(payload) == "table" and payload.ready == true)
 	end)
 
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		readyPlayers[player] = nil
 	end)
 end
@@ -679,6 +681,21 @@ end
 
 function StyleService.ResetReady(): ()
 	table.clear(readyPlayers)
+end
+
+function StyleService.Destroy(): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(readyPlayers)
+	dataService = nil
+	remoteService = nil
+	styleCatalog = nil
+	economyService = nil
+	progressionService = nil
+	analyticsService = nil
+	config = nil
 end
 
 return StyleService

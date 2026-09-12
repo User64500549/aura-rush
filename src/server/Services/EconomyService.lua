@@ -3,10 +3,14 @@
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 
+local DataStoreOperation = require(script.Parent.Parent.Util.DataStoreOperation)
+
 local EconomyService = {}
 
 local dataService: any = nil
 local receiptStore: any = nil
+local persistenceConfig: any = nil
+local receiptDiagnostics = DataStoreOperation.NewDiagnostics()
 
 local MAX_TRANSACTION_AMOUNT = 1_000_000_000
 local MAX_TRANSACTION_ID_LENGTH = 160
@@ -93,9 +97,8 @@ local function readArchivedReceipt(purchaseId: string, userId: number): (boolean
 		-- truncated without a durable replacement.
 		return true, false, nil
 	end
-	local ok, record = pcall(function()
-		return receiptStore:GetAsync(key)
-	end)
+	local ok, record =
+		DataStoreOperation.Read(receiptStore, key, persistenceConfig, receiptDiagnostics)
 	if not ok then
 		return false, false, "receipt_archive_unavailable"
 	end
@@ -117,24 +120,19 @@ local function archiveReceipt(purchaseId: string, userId: number): (boolean, str
 		return false, "receipt_id_too_long"
 	end
 	local conflict = false
-	local ok = pcall(function()
-		receiptStore:UpdateAsync(key, function(current: any)
-			if current ~= nil then
-				if
-					type(current) ~= "table"
-					or math.floor(tonumber(current.userId) or 0) ~= userId
-				then
-					conflict = true
-				end
-				return current
+	local ok = DataStoreOperation.Update(receiptStore, key, function(current: any)
+		if current ~= nil then
+			if type(current) ~= "table" or math.floor(tonumber(current.userId) or 0) ~= userId then
+				conflict = true
 			end
-			return {
-				userId = userId,
-				processedAt = os.time(),
-				version = 1,
-			}
-		end)
-	end)
+			return current
+		end
+		return {
+			userId = userId,
+			processedAt = os.time(),
+			version = 1,
+		}
+	end, persistenceConfig, receiptDiagnostics)
 	if not ok or conflict then
 		return false,
 			if conflict then "receipt_archive_conflict" else "receipt_archive_write_failed"
@@ -158,6 +156,8 @@ end
 function EconomyService.Init(context: any): ()
 	dataService = context.Services.Data
 	receiptStore = nil
+	persistenceConfig = if type(context.Config) == "table" then context.Config.Persistence else nil
+	receiptDiagnostics = DataStoreOperation.NewDiagnostics()
 	if not RunService:IsStudio() and game.GameId ~= 0 then
 		local ok, store = pcall(function()
 			return DataStoreService:GetDataStore(RECEIPT_STORE_NAME)
@@ -168,6 +168,10 @@ function EconomyService.Init(context: any): ()
 			warn("[AuraRush/Economy] Receipt archive unavailable; using profile ledger")
 		end
 	end
+end
+
+function EconomyService.GetReceiptPersistenceDiagnostics(): any
+	return DataStoreOperation.Snapshot(receiptDiagnostics)
 end
 
 function EconomyService.GetBalance(player: Player): number

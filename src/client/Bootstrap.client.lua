@@ -34,6 +34,7 @@ local function boot(): ()
 	local FirstMiracleController = require(script.Parent.Controllers.FirstMiracleController)
 	local MetaPanelController = require(script.Parent.Controllers.MetaPanelController)
 	local RemixController = require(script.Parent.Controllers.RemixController)
+	local AdminDashboardController = require(script.Parent.Controllers.AdminDashboardController)
 
 	local remotes = RemoteRegistry.new()
 	if not remotes:IsReady() then
@@ -80,6 +81,7 @@ local function boot(): ()
 	local socialInviteController = SocialInviteController.new(app)
 	local storeController = StoreController.new(app)
 	local remixController = RemixController.new(app, remotes)
+	local adminDashboardController = AdminDashboardController.new(app, remotes, playerGui)
 	local roundController = RoundController.new(app, remotes)
 
 	local bootDurationMilliseconds =
@@ -110,6 +112,7 @@ local function boot(): ()
 		socialInviteController:Destroy()
 		storeController:Destroy()
 		remixController:Destroy()
+		adminDashboardController:Destroy()
 		metaPanelController:Destroy()
 		firstMiracleController:Destroy()
 		featureFlagController:Destroy()

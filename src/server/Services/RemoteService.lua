@@ -9,21 +9,6 @@ local DEFAULT_FOLDER_NAME = "AuraRushRemotes"
 local MAX_PAYLOAD_DEPTH = 5
 local MAX_PAYLOAD_NODES = 96
 local MAX_PAYLOAD_STRING_BYTES = 256
-local REMOTE_CLASSES: { [string]: string } = {
-	RequestSnapshot = "RemoteFunction",
-	VoteBrief = "RemoteEvent",
-	BeatHit = "RemoteEvent",
-	SubmitPrism = "RemoteEvent",
-	SetStyle = "RemoteEvent",
-	UnlockStyle = "RemoteEvent",
-	UpdateSettings = "RemoteEvent",
-	SetStyleReady = "RemoteEvent",
-	Nominate = "RemoteEvent",
-	RoundSnapshot = "RemoteEvent",
-	ProgressUpdate = "RemoteEvent",
-	Toast = "RemoteEvent",
-	BloomStarted = "RemoteEvent",
-}
 
 type Window = {
 	startedAt: number,
@@ -196,20 +181,27 @@ function RemoteService.Init(context: any): ()
 	folder = remoteFolder
 	remoteFolder:SetAttribute("ContractReady", false)
 
-	local classes: { [string]: string } = table.clone(REMOTE_CLASSES)
-	if type(definition) == "table" and type(definition.All) == "table" then
-		for _, remoteDefinition in definition.All do
-			if
-				type(remoteDefinition) == "table"
-				and type(remoteDefinition.name) == "string"
-				and (
-					remoteDefinition.className == "RemoteEvent"
-					or remoteDefinition.className == "RemoteFunction"
-				)
-			then
-				classes[remoteDefinition.name] = remoteDefinition.className
-			end
-		end
+	assert(
+		type(definition) == "table" and type(definition.All) == "table",
+		"Aura Rush remote definitions are required"
+	)
+	local classes: { [string]: string } = {}
+	for _, remoteDefinition in definition.All do
+		assert(type(remoteDefinition) == "table", "Invalid Aura Rush remote definition")
+		assert(
+			type(remoteDefinition.name) == "string" and remoteDefinition.name ~= "",
+			"Aura Rush remote definition is missing a name"
+		)
+		assert(
+			remoteDefinition.className == "RemoteEvent"
+				or remoteDefinition.className == "RemoteFunction",
+			"Aura Rush remote definition has an invalid class"
+		)
+		assert(
+			classes[remoteDefinition.name] == nil,
+			"Duplicate Aura Rush remote definition: " .. remoteDefinition.name
+		)
+		classes[remoteDefinition.name] = remoteDefinition.className
 	end
 	local contractCount = 0
 	for name, className in classes do

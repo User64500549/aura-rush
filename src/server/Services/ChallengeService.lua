@@ -64,6 +64,7 @@ local prismAttempts: { [Player]: number } = {}
 local touchConnections: { RBXScriptConnection } = {}
 local humanoidDefaults: { [Humanoid]: any } = {}
 local sharedMechanicState: any = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local function resetSharedMechanicState(): ()
 	sharedMechanicState = {
@@ -420,7 +421,61 @@ local function handleThreadTouch(collectible: BasePart, hit: BasePart): ()
 	})
 end
 
+local function clearPlayerState(player: Player): ()
+	activeParticipants[player] = nil
+	progress[player] = nil
+	threadCollected[player] = nil
+	threadLastTouchAt[player] = nil
+	beatHits[player] = nil
+	prismSequences[player] = nil
+	prismEncodedSequences[player] = nil
+	prismPositions[player] = nil
+	prismAttempts[player] = nil
+end
+
+local function disconnectTouchConnections(): ()
+	for _, connection in touchConnections do
+		connection:Disconnect()
+	end
+	table.clear(touchConnections)
+end
+
+function ChallengeService.Destroy(): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	disconnectTouchConnections()
+	restoreMovement()
+	table.clear(activeParticipants)
+	table.clear(progress)
+	table.clear(threadCollected)
+	table.clear(threadLastTouchAt)
+	table.clear(beatHits)
+	table.clear(prismSequences)
+	table.clear(prismEncodedSequences)
+	table.clear(prismPositions)
+	table.clear(prismAttempts)
+	activePhase = "Waiting"
+	activeRoundId = ""
+	activeActId = "thread_run"
+	activeActIndex = 1
+	activeActSeed = 1
+	activeTargetScale = 1
+	activeTeamCompletionRatio = 0.65
+	activeModifierId = ""
+	activeLaneTransform = ""
+	activeMovementStyle = ""
+	activeMechanicProfile = GameplayMechanics.Resolve({})
+	resetSharedMechanicState()
+	config = nil
+	remoteService = nil
+	worldService = nil
+	remixService = nil
+end
+
 function ChallengeService.Init(context: any): ()
+	ChallengeService.Destroy()
 	config = context.Config
 	remoteService = context.Services.Remote
 	worldService = context.Services.World
@@ -433,24 +488,11 @@ function ChallengeService.Init(context: any): ()
 		ChallengeService.SubmitPrism(player, payload)
 	end)
 
-	Players.PlayerRemoving:Connect(function(player)
-		activeParticipants[player] = nil
-		progress[player] = nil
-		threadCollected[player] = nil
-		threadLastTouchAt[player] = nil
-		beatHits[player] = nil
-		prismSequences[player] = nil
-		prismEncodedSequences[player] = nil
-		prismPositions[player] = nil
-		prismAttempts[player] = nil
-	end)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(clearPlayerState)
 end
 
 function ChallengeService.BindWorld(): ()
-	for _, connection in touchConnections do
-		connection:Disconnect()
-	end
-	table.clear(touchConnections)
+	disconnectTouchConnections()
 	local worldCollectibles = if type(worldService.GetAllCollectibles) == "function"
 		then worldService.GetAllCollectibles()
 		else worldService.GetCollectibles()

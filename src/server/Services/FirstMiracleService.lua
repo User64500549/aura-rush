@@ -11,6 +11,8 @@ local lastActionAt: { [Player]: number } = {}
 local scheduledSession: { [Player]: string } = {}
 local spatialSessions: { [Player]: any } = {}
 local firstInputSession: { [Player]: string } = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
+local lifecycleEpoch = 0
 
 local SPATIAL_STEPS = {
 	collect_thread = {
@@ -465,7 +467,11 @@ local function beginBloom(player: Player, reason: string, skipped: boolean): boo
 	})
 	spatialSessions[player] = nil
 	fireUpdate(player)
+	local expectedEpoch = lifecycleEpoch
 	task.delay(bloomSeconds(), function()
+		if expectedEpoch ~= lifecycleEpoch or not services then
+			return
+		end
 		completeMiracle(player, sessionId, reason)
 	end)
 	return true
@@ -575,6 +581,9 @@ completeMiracle = function(player: Player, sessionId: string, reason: string): (
 end
 
 local function scheduleSession(player: Player): ()
+	if not services then
+		return
+	end
 	local state = getState(player)
 	if not state or state.status == "NotStarted" or state.status == "Complete" then
 		return
@@ -604,13 +613,20 @@ local function scheduleSession(player: Player): ()
 		now,
 		(tonumber(state.expiresAt) or (now + maximumSeconds())) - math.ceil(bloomSeconds())
 	)
+	local expectedEpoch = lifecycleEpoch
 	task.delay(paletteDelay, function()
+		if expectedEpoch ~= lifecycleEpoch or not services then
+			return
+		end
 		local current = getState(player)
 		if current and current.sessionId == sessionId and current.status == "PaletteChoice" then
 			setPalette(player, defaultPaletteId(), "choice_timeout")
 		end
 	end)
 	task.delay(math.max(0, forcedBloomAt - now), function()
+		if expectedEpoch ~= lifecycleEpoch or not services then
+			return
+		end
 		local current = getState(player)
 		if current and current.sessionId == sessionId and current.status ~= "Complete" then
 			beginBloom(player, "time_guarantee", current.actionIndex < actionTarget())
@@ -619,6 +635,9 @@ local function scheduleSession(player: Player): ()
 	if state.status == "Bloom" then
 		local elapsed = math.max(0, now - (tonumber(state.bloomStartedAt) or now))
 		task.delay(math.max(0, bloomSeconds() - elapsed), function()
+			if expectedEpoch ~= lifecycleEpoch or not services then
+				return
+			end
 			completeMiracle(player, sessionId, tostring(state.completionReason or "resumed"))
 		end)
 	elseif forcedBloomAt <= now then
@@ -723,6 +742,9 @@ local function performAction(player: Player, actionId: string, payload: any?): (
 end
 
 function FirstMiracleService.Resume(player: Player): ()
+	if not services then
+		return
+	end
 	local state = getState(player)
 	if state and state.status ~= "NotStarted" and state.status ~= "Complete" then
 		scheduleSession(player)
@@ -730,6 +752,8 @@ function FirstMiracleService.Resume(player: Player): ()
 end
 
 function FirstMiracleService.Init(context: any): ()
+	FirstMiracleService.Destroy()
+	lifecycleEpoch += 1
 	services = context.Services
 	config = context.Config
 	services.Remote.BindFunction("RequestFirstMiracle", 1, function(player: Player, _payload: any)
@@ -752,12 +776,26 @@ function FirstMiracleService.Init(context: any): ()
 			beginBloom(player, "player_skip", true)
 		end
 	end)
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		lastActionAt[player] = nil
 		scheduledSession[player] = nil
 		spatialSessions[player] = nil
 		firstInputSession[player] = nil
 	end)
+end
+
+function FirstMiracleService.Destroy(): ()
+	lifecycleEpoch += 1
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	table.clear(lastActionAt)
+	table.clear(scheduledSession)
+	table.clear(spatialSessions)
+	table.clear(firstInputSession)
+	services = nil
+	config = nil
 end
 
 return FirstMiracleService

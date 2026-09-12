@@ -98,6 +98,26 @@ local copy: { CopyEntry } = {
 		en = "Moment card saved!",
 		ru = "Карточка момента сохранена!",
 	},
+	{
+		key = "toast.admin_notice_maintenance_soon",
+		en = "The district will pause briefly soon.",
+		ru = "Скоро будет короткий перерыв в районе.",
+	},
+	{
+		key = "toast.admin_notice_update_ready",
+		en = "A district update is ready.",
+		ru = "Обновление района уже готово.",
+	},
+	{
+		key = "toast.admin_action_done",
+		en = "Operations action completed.",
+		ru = "Действие выполнено.",
+	},
+	{
+		key = "toast.admin_action_blocked",
+		en = "The action is unavailable right now.",
+		ru = "Сейчас действие недоступно.",
+	},
 
 	-- Round states and direct instructions.
 	{ key = "round.state.Waiting", en = "Waiting", ru = "Ожидание" },

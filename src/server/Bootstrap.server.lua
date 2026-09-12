@@ -114,6 +114,7 @@ local function boot(): ()
 	local FirstMiracleService = require(servicesRoot:WaitForChild("FirstMiracleService"))
 	local MetaService = require(servicesRoot:WaitForChild("MetaService"))
 	local SecretFrameService = require(servicesRoot:WaitForChild("SecretFrameService"))
+	local AdminService = require(servicesRoot:WaitForChild("AdminService"))
 
 	local context: any = {
 		Config = Config,
@@ -210,6 +211,7 @@ local function boot(): ()
 		"gameplay"
 	)
 	context.Services.Style = StyleService
+	lifecycle:Add("style", StyleService.Destroy)
 	StyleService.Init(context)
 
 	context.Services.CityPulse = CityPulseService
@@ -217,10 +219,11 @@ local function boot(): ()
 	CityPulseService.Init(context)
 
 	context.Services.Remix = RemixCityService
-	lifecycle:Add("remix city", RemixCityService.Reset)
+	lifecycle:Add("remix city", RemixCityService.Destroy)
 	RemixCityService.Init(context)
 
 	context.Services.Challenge = ChallengeService
+	lifecycle:Add("challenge", ChallengeService.Destroy)
 	ChallengeService.Init(context)
 	ChallengeService.BindWorld()
 
@@ -234,16 +237,19 @@ local function boot(): ()
 	context.Services.AuraGenome = AuraGenomeService
 
 	context.Services.Round = RoundService
-	lifecycle:Add("round", RoundService.Stop)
+	lifecycle:Add("round", RoundService.Destroy)
 	RoundService.Init(context)
 
 	context.Services.SocialCreation = SocialCreationService
+	lifecycle:Add("social creation", SocialCreationService.Destroy)
 	SocialCreationService.Init(context)
 
 	context.Services.Celebration = CelebrationService
+	lifecycle:Add("celebration", CelebrationService.Destroy)
 	CelebrationService.Init(context)
 
 	context.Services.FirstMiracle = FirstMiracleService
+	lifecycle:Add("first miracle", FirstMiracleService.Destroy)
 	FirstMiracleService.Init(context)
 
 	context.Services.Meta = MetaService
@@ -252,6 +258,10 @@ local function boot(): ()
 	context.Services.SecretFrames = SecretFrameService
 	lifecycle:Add("secret frames", SecretFrameService.Destroy)
 	SecretFrameService.Init(context)
+
+	context.Services.Admin = AdminService
+	lifecycle:Add("admin operations", AdminService.Destroy)
+	AdminService.Init(context)
 
 	setRuntimeState("server_starting", "Встречаем игроков", "players")
 	local lifecycleActive = true

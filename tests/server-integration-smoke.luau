@@ -34,6 +34,7 @@ local ArtDirectionRegistry = load(sharedRoot, "ArtDirectionRegistry")
 local LiveOpsManifest = load(sharedRoot, "LiveOpsManifest")
 local ProductionAssetManifest = load(sharedRoot, "ProductionAssetManifest")
 local ProductCatalog = load(sharedRoot, "ProductCatalog")
+local StaffPolicy = load(sharedRoot, "StaffPolicy")
 
 local RemoteService = load(servicesRoot, "RemoteService")
 local FeatureFlagService = load(servicesRoot, "FeatureFlagService")
@@ -62,6 +63,7 @@ local CelebrationService = load(servicesRoot, "CelebrationService")
 local FirstMiracleService = load(servicesRoot, "FirstMiracleService")
 local MetaService = load(servicesRoot, "MetaService")
 local SecretFrameService = load(servicesRoot, "SecretFrameService")
+local AdminService = load(servicesRoot, "AdminService")
 
 local context: any = {
 	Config = Config,
@@ -143,6 +145,8 @@ local initOk, initMessage = xpcall(function()
 	MetaService.Init(context)
 	context.Services.SecretFrames = SecretFrameService
 	SecretFrameService.Init(context)
+	context.Services.Admin = AdminService
+	AdminService.Init(context)
 
 	stage("round")
 	RoundService.Start()
@@ -157,6 +161,32 @@ local remoteFolder = ReplicatedStorage:FindFirstChild(RemotesDefinition.FolderNa
 local remoteContractWasReady = remoteFolder ~= nil
 	and remoteFolder:GetAttribute("ContractReady") == true
 	and remoteFolder:GetAttribute("ContractVersion") == RemotesDefinition.Version
+local adminPolicy = AdminService.GetPolicySummary()
+local operationsView = RoundService.GetOperationsView()
+local fakeOwner: any = {
+	UserId = 910001,
+	GetRankInGroup = function(): number
+		return 0
+	end,
+}
+local fakeAdmin: any = {
+	UserId = 910002,
+	GetRankInGroup = function(): number
+		return 200
+	end,
+}
+local explicitOwnerConfig = {
+	Enabled = true,
+	OwnerUserIds = { 910001 },
+	GroupId = 0,
+	GroupRanks = {},
+}
+local groupAdminConfig = {
+	Enabled = true,
+	OwnerUserIds = {},
+	GroupId = 1,
+	GroupRanks = { Admin = 200, Moderator = 100, Support = 50 },
+}
 
 local cleanupErrors = {}
 local function cleanup(label: string, callback: () -> ()): ()
@@ -167,11 +197,17 @@ local function cleanup(label: string, callback: () -> ()): ()
 end
 
 stage("cleanup")
-cleanup("round", RoundService.Stop)
-cleanup("remix", RemixCityService.Reset)
+cleanup("round", RoundService.Destroy)
+cleanup("first miracle", FirstMiracleService.Destroy)
+cleanup("celebration", CelebrationService.Destroy)
+cleanup("social creation", SocialCreationService.Destroy)
+cleanup("challenge", ChallengeService.Destroy)
+cleanup("style", StyleService.Destroy)
+cleanup("remix", RemixCityService.Destroy)
 cleanup("city pulse", CityPulseService.Stop)
 cleanup("community", CommunityBloomService.Stop)
 cleanup("secret frames", SecretFrameService.Destroy)
+cleanup("admin operations", AdminService.Destroy)
 cleanup("data", DataService.Shutdown)
 cleanup("party", PartyService.Destroy)
 cleanup("flags", FeatureFlagService.Destroy)
@@ -185,7 +221,27 @@ check(worldWasBuilt, "world graph was not built")
 check(hubWasBuilt, "integrated world has no hub")
 check(secretFramesWereBuilt, "secret frames were not integrated into the world")
 check(remoteContractWasReady, "remote contract was not atomically published")
-check(#RemotesDefinition.All == 32, "network definition count changed")
+check(#RemotesDefinition.All == 35, "network definition count changed")
+check(
+	RemotesDefinition.ByName.RequestAdminSnapshot.className == "RemoteFunction",
+	"admin snapshot remote has the wrong contract"
+)
+check(
+	RemotesDefinition.ByName.AdminAction.className == "RemoteEvent",
+	"admin action remote has the wrong contract"
+)
+check(adminPolicy.enabled == true and adminPolicy.announcementCount == 2, "admin policy is invalid")
+check(
+	operationsView.state ~= nil and operationsView.participantCount ~= nil,
+	"operations view is invalid"
+)
+check(StaffPolicy.ResolveRole(fakeOwner, explicitOwnerConfig) == "Owner", "owner policy failed")
+check(StaffPolicy.ResolveRole(fakeAdmin, groupAdminConfig) == "Admin", "group policy failed")
+check(
+	StaffPolicy.Can("Player", "view_dashboard") == false
+		and StaffPolicy.Can("Admin", "broadcast_announcement") == true,
+	"staff permissions are invalid"
+)
 
 local stats = RemoteService.GetStats()
 check(next(stats) == nil, "destroy left stale remote counters")

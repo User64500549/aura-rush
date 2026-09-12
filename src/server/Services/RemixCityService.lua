@@ -26,6 +26,7 @@ local lastMomentKind = ""
 local guardian: any = nil
 local pendingReplays: { [Player]: any } = {}
 local actionCooldowns: { [Player]: { [string]: number } } = {}
+local playerRemovingConnection: RBXScriptConnection? = nil
 
 local VALID_MOMENT_KINDS = table.freeze({
 	route = true,
@@ -514,6 +515,7 @@ local function guardianPulse(player: Player): boolean
 end
 
 function RemixCityService.Init(context: any): ()
+	RemixCityService.Destroy()
 	config = context.Config
 	services = context.Services
 	styleCatalog = context.StyleCatalog
@@ -551,7 +553,7 @@ function RemixCityService.Init(context: any): ()
 		end
 	end)
 
-	Players.PlayerRemoving:Connect(function(player)
+	playerRemovingConnection = Players.PlayerRemoving:Connect(function(player)
 		participantSet[player] = nil
 		roles[player] = nil
 		roleContributions[player] = nil
@@ -813,6 +815,19 @@ function RemixCityService.Reset(): ()
 	table.clear(moments)
 	table.clear(pendingReplays)
 	table.clear(actionCooldowns)
+end
+
+function RemixCityService.Destroy(): ()
+	if playerRemovingConnection then
+		playerRemovingConnection:Disconnect()
+		playerRemovingConnection = nil
+	end
+	RemixCityService.Reset()
+	config = nil
+	services = nil
+	styleCatalog = nil
+	remixCatalog = nil
+	styleChemistry = nil
 end
 
 return RemixCityService
